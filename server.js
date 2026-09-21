@@ -257,6 +257,8 @@ const calls = new Map();
 const queue = [];
 /** all connected agent sockets, for queue broadcasts */
 const agentConns = new Set();
+/** every live connection (guest + agent), so keepalive pings reach everyone */
+const allConns = new Set();
 const callLog = [];
 
 function broadcastQueue() {
@@ -305,6 +307,7 @@ function endCall(callId, reason) {
 
 function handleGuestConnection(conn) {
   let myCallId = null;
+  allConns.add(conn);
 
   conn.onMessage = (raw) => {
     let msg;
@@ -349,12 +352,14 @@ function handleGuestConnection(conn) {
   };
 
   conn.onClose = () => {
+    allConns.delete(conn);
     if (myCallId) endCall(myCallId, 'guest-disconnected');
   };
 }
 
 function handleAgentConnection(conn) {
   let agentName = null;
+  allConns.add(conn);
   console.log('[agent] connection handler attached, waiting for messages');
 
   conn.onMessage = (raw) => {
@@ -426,6 +431,7 @@ function handleAgentConnection(conn) {
 
   conn.onClose = () => {
     console.log('[agent] connection closed, was logged in as:', agentName || '(never logged in)');
+    allConns.delete(conn);
     agentConns.delete(conn);
     // Any call this agent was actively on gets ended so the guest isn't stuck.
     for (const [callId, call] of calls) {
@@ -493,10 +499,12 @@ process.on('unhandledRejection', (err) => {
 });
 
 // Keepalive pings so dead connections (network drop, closed laptop lid)
-// don't linger and confuse the queue.
+// don't linger and confuse the queue — and so a proxy in front of this
+// server (Render's included) doesn't treat a quiet-but-live connection as
+// idle and close it out from under an in-progress call.
 setInterval(() => {
-  for (const a of agentConns) a.ping();
-}, 25000).unref();
+  for (const c of allConns) c.ping();
+}, 20000).unref();
 
 server.listen(PORT, () => {
   console.log(`Virtual Front Desk listening on http://localhost:${PORT}`);
