@@ -1,14 +1,22 @@
 'use strict';
 
 const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  // Production note: add a TURN server here too — STUN alone will fail to
-  // connect guests/agents behind symmetric NATs or strict hotel firewalls.
-  // { urls: 'turn:turn.example.com:3478', username: '...', credential: '...' },
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  { urls: 'turn:global.relay.metered.ca:443', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  // Free Metered.ca relay — fine for testing/small-scale use. Swap for your
+  // own TURN credentials (or a paid Metered plan) before relying on this
+  // for real guest traffic; free-tier bandwidth is limited.
 ];
 
 const WAIT_WARNING_MS = 60 * 1000;
 const IDLE_RESET_MS = 4000;
+const CONNECT_TIMEOUT_MS = 15 * 1000; // if WebRTC never reaches "connected" in this window
+                                        // (most commonly: no TURN server and the network
+                                        // blocks direct peer-to-peer), fail loudly instead
+                                        // of leaving the guest staring at a blank screen.
 
 const screens = {};
 document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
@@ -27,6 +35,7 @@ let callStartedAt = null;
 let callTimerHandle = null;
 let micOn = true;
 let camOn = true;
+let connectTimeoutHandle = null;
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -114,14 +123,33 @@ async function startPeerConnection() {
   };
 
   pc.onconnectionstatechange = () => {
-    if (pc && (pc.connectionState === 'failed' || pc.connectionState === 'disconnected')) {
-      console.warn('Peer connection', pc.connectionState);
+    if (!pc) return;
+    console.warn('Peer connection state:', pc.connectionState);
+    if (pc.connectionState === 'connected') {
+      clearTimeout(connectTimeoutHandle);
+    } else if (pc.connectionState === 'failed') {
+      clearTimeout(connectTimeoutHandle);
+      failConnection();
     }
   };
+
+  clearTimeout(connectTimeoutHandle);
+  connectTimeoutHandle = setTimeout(() => {
+    if (pc && pc.connectionState !== 'connected') failConnection();
+  }, CONNECT_TIMEOUT_MS);
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   wsSend({ type: 'signal', signalType: 'offer', data: offer });
+}
+
+function failConnection() {
+  wsSend({ type: 'hangup' });
+  cleanupCall();
+  showError(
+    'Could not connect',
+    'We could not establish a stable video connection. This usually means the network is blocking a direct connection between devices — please try again, or dial 0 from a house phone.'
+  );
 }
 
 async function requestMediaAndJoin(topic) {
@@ -181,6 +209,7 @@ function formatTime(ms) {
 function cleanupCall() {
   stopWaitTimer();
   stopCallTimer();
+  clearTimeout(connectTimeoutHandle);
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   micOn = true; camOn = true;

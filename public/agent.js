@@ -1,8 +1,13 @@
 'use strict';
 
 const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  // Production note: add a TURN server here too — see kiosk.js for why.
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  { urls: 'turn:global.relay.metered.ca:443', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
+  // Free Metered.ca relay — see kiosk.js for the same note. Keep both files
+  // in sync if you swap this for your own TURN credentials.
 ];
 
 const screens = {};
@@ -23,6 +28,8 @@ let noteDebounce = null;
 let knownQueueIds = new Set();
 let micOn = true;
 let camOn = true;
+let connectTimeoutHandle = null;
+const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
 
 function beep() {
   try {
@@ -239,6 +246,19 @@ async function startAsAnswerer() {
       wsSend({ type: 'signal', callId: currentCallId, signalType: 'ice', data: evt.candidate });
     }
   };
+  pc.onconnectionstatechange = () => {
+    if (!pc) return;
+    if (pc.connectionState === 'connected') {
+      clearTimeout(connectTimeoutHandle);
+    } else if (pc.connectionState === 'failed') {
+      clearTimeout(connectTimeoutHandle);
+      failConnection();
+    }
+  };
+  clearTimeout(connectTimeoutHandle);
+  connectTimeoutHandle = setTimeout(() => {
+    if (pc && pc.connectionState !== 'connected') failConnection();
+  }, CONNECT_TIMEOUT_MS);
 
   callStartedAt = Date.now();
   callTimerHandle = setInterval(() => {
@@ -260,6 +280,7 @@ async function handleSignal(signalType, data) {
 }
 
 function endActiveCallUI() {
+  clearTimeout(connectTimeoutHandle);
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   clearInterval(callTimerHandle);
@@ -269,6 +290,12 @@ function endActiveCallUI() {
   micOn = true; camOn = true;
   document.getElementById('active-call').classList.add('hidden');
   document.getElementById('no-call-placeholder').classList.remove('hidden');
+}
+
+function failConnection() {
+  if (currentCallId) wsSend({ type: 'end-call', callId: currentCallId });
+  endActiveCallUI();
+  alert('Could not establish a stable video connection with the guest. This usually means the network is blocking a direct connection between devices — a TURN server needs to be configured (see README).');
 }
 
 function escapeHtml(s) {
