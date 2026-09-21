@@ -355,10 +355,15 @@ function handleGuestConnection(conn) {
 
 function handleAgentConnection(conn) {
   let agentName = null;
+  console.log('[agent] connection handler attached, waiting for messages');
 
   conn.onMessage = (raw) => {
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try { msg = JSON.parse(raw); } catch (err) {
+      console.error('[agent] received non-JSON frame:', raw.slice(0, 200), err.message);
+      return;
+    }
+    console.log('[agent] received message type:', msg.type);
 
     if (msg.type === 'agent-login') {
       const match = AGENTS.find((a) => a.pin === String(msg.pin || ''));
@@ -420,6 +425,7 @@ function handleAgentConnection(conn) {
   };
 
   conn.onClose = () => {
+    console.log('[agent] connection closed, was logged in as:', agentName || '(never logged in)');
     agentConns.delete(conn);
     // Any call this agent was actively on gets ended so the guest isn't stuck.
     for (const [callId, call] of calls) {
@@ -442,10 +448,24 @@ const server = http.createServer((req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
+  const ip = req.socket.remoteAddress;
+  console.log(`[upgrade] request for ${req.url} from ${ip}, headers:`, JSON.stringify({
+    upgrade: req.headers['upgrade'],
+    connection: req.headers['connection'],
+    'sec-websocket-key': req.headers['sec-websocket-key'] ? '(present)' : '(MISSING)',
+    'sec-websocket-version': req.headers['sec-websocket-version'],
+  }));
+
+  socket.on('error', (err) => console.error('[upgrade] raw socket error:', err.message));
+
   if (req.url.startsWith('/ws')) {
     const role = new URL(req.url, 'http://x').searchParams.get('role');
     const conn = acceptWebSocket(req, socket);
-    if (!conn) return;
+    if (!conn) {
+      console.error(`[upgrade] rejected ${req.url} — missing Sec-WebSocket-Key`);
+      return;
+    }
+    console.log(`[upgrade] 101 handshake sent for role=${role}`);
     if (role === 'agent') handleAgentConnection(conn);
     else handleGuestConnection(conn);
     // A proxy (Render's included) can forward bytes that arrived right after
@@ -453,8 +473,12 @@ server.on('upgrade', (req, socket, head) => {
     // those in `head` instead of re-emitting them as a 'data' event. Skipping
     // this meant any client that sent its first frame quickly would have
     // those bytes silently dropped, leaving the connection stuck forever.
-    if (head && head.length) conn._onData(head);
+    if (head && head.length) {
+      console.log(`[upgrade] feeding ${head.length} buffered bytes from head`);
+      conn._onData(head);
+    }
   } else {
+    console.log(`[upgrade] rejected non-/ws path: ${req.url}`);
     socket.destroy();
   }
 });
