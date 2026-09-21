@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
+const chat = require('./chat');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -351,6 +352,49 @@ function endCall(callId, reason) {
 }
 
 // ======================================================================
+// Chat (WhatsApp / Messenger) — incoming messages arrive over the
+// webhooks below; agents read/reply from the dashboard over the same
+// WebSocket used for calls. This is a text-chat channel alongside video
+// calls, not a replacement for them — see chat.js for the Meta API side.
+// ======================================================================
+
+/** conversationId -> { id, platform, contactId, contactName, messages: [...], lastMessageAt, unread } */
+const chatConversations = new Map();
+// A conversation can grow large over a long relationship with a guest —
+// bounded per-conversation so memory (and the Redis value size) stay sane.
+const CHAT_MESSAGES_PER_CONVO_LIMIT = 500;
+
+function chatConversationId(platform, contactId) {
+  return `${platform}:${contactId}`;
+}
+
+function getOrCreateChatConversation(platform, contactId, contactName) {
+  const id = chatConversationId(platform, contactId);
+  let convo = chatConversations.get(id);
+  if (!convo) {
+    convo = { id, platform, contactId, contactName: contactName || null, messages: [], lastMessageAt: 0, unread: false };
+    chatConversations.set(id, convo);
+  } else if (contactName && !convo.contactName) {
+    convo.contactName = contactName;
+  }
+  return convo;
+}
+
+function broadcastChatUpdate(convo) {
+  for (const a of agentConns) a.send({ type: 'chat-update', conversation: convo });
+}
+
+async function recordIncomingChatMessage(platform, contactId, contactName, text, at) {
+  const convo = getOrCreateChatConversation(platform, contactId, contactName);
+  convo.messages.push({ direction: 'in', text, at });
+  if (convo.messages.length > CHAT_MESSAGES_PER_CONVO_LIMIT) convo.messages.shift();
+  convo.lastMessageAt = at;
+  convo.unread = true;
+  broadcastChatUpdate(convo);
+  store.persistChat(convo).catch(() => {});
+}
+
+// ======================================================================
 // Admin API — manage agents and view performance.
 // ======================================================================
 // Auth is a single shared password sent as `X-Admin-Password` on every
@@ -406,6 +450,80 @@ function readJsonBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+/** Like readJsonBody, but returns the raw bytes — webhook signature
+ *  verification needs the exact bytes Meta sent, not a re-serialized copy. */
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > 2e6) { reject(new Error('body too large')); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+// ======================================================================
+// Webhooks — Meta calls these when a guest sends a WhatsApp or Messenger
+// message. See chat.js for the API calls and payload parsing; this just
+// wires HTTP routing + the one-time verification handshake.
+// ======================================================================
+
+function handleWebhookVerify(req, res, urlObj) {
+  const query = Object.fromEntries(urlObj.searchParams);
+  const challenge = chat.verifyWebhookChallenge(query);
+  if (challenge !== null) {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end(challenge);
+  } else {
+    res.writeHead(403).end('Forbidden');
+  }
+}
+
+async function handleWhatsAppWebhookPost(req, res) {
+  const raw = await readRawBody(req);
+  if (!chat.verifySignature(raw, req.headers['x-hub-signature-256'])) {
+    console.error('[webhook] WhatsApp: signature check failed, rejecting');
+    res.writeHead(401).end('invalid signature');
+    return;
+  }
+  // Respond quickly and unconditionally — Meta retries aggressively on a
+  // slow or non-200 response, which would otherwise cause duplicate
+  // deliveries of the same message.
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('OK');
+  let body;
+  try { body = JSON.parse(raw.toString('utf8')); } catch (err) {
+    console.error('[webhook] WhatsApp: could not parse payload:', err.message);
+    return;
+  }
+  for (const msg of chat.parseWhatsAppWebhook(body)) {
+    await recordIncomingChatMessage('whatsapp', msg.contactId, msg.contactName, msg.text, msg.at);
+  }
+}
+
+async function handleMessengerWebhookPost(req, res) {
+  const raw = await readRawBody(req);
+  if (!chat.verifySignature(raw, req.headers['x-hub-signature-256'])) {
+    console.error('[webhook] Messenger: signature check failed, rejecting');
+    res.writeHead(401).end('invalid signature');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('OK');
+  let body;
+  try { body = JSON.parse(raw.toString('utf8')); } catch (err) {
+    console.error('[webhook] Messenger: could not parse payload:', err.message);
+    return;
+  }
+  for (const msg of chat.parseMessengerWebhook(body)) {
+    await recordIncomingChatMessage('messenger', msg.contactId, msg.contactName, msg.text, msg.at);
+  }
 }
 
 async function handleAdminApi(req, res, urlObj) {
@@ -527,7 +645,7 @@ function handleAgentConnection(conn) {
   allConns.add(conn);
   console.log('[agent] connection handler attached, waiting for messages');
 
-  conn.onMessage = (raw) => {
+  conn.onMessage = async (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch (err) {
       console.error('[agent] received non-JSON frame:', raw.slice(0, 200), err.message);
@@ -591,6 +709,44 @@ function handleAgentConnection(conn) {
 
     if (msg.type === 'get-log') {
       conn.send({ type: 'call-log', entries: callLog.slice(-50).reverse() });
+      return;
+    }
+
+    if (msg.type === 'get-chats') {
+      const conversations = [...chatConversations.values()].sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+      conn.send({ type: 'chat-list', conversations });
+      return;
+    }
+
+    if (msg.type === 'chat-mark-read' && msg.conversationId) {
+      const convo = chatConversations.get(msg.conversationId);
+      if (convo && convo.unread) {
+        convo.unread = false;
+        broadcastChatUpdate(convo);
+        store.persistChat(convo).catch(() => {});
+      }
+      return;
+    }
+
+    if (msg.type === 'send-chat-reply' && msg.conversationId) {
+      const convo = chatConversations.get(msg.conversationId);
+      if (!convo) return;
+      const text = String(msg.text || '').trim().slice(0, 2000);
+      if (!text) return;
+      try {
+        if (convo.platform === 'whatsapp') await chat.sendWhatsAppMessage(convo.contactId, text);
+        else if (convo.platform === 'messenger') await chat.sendMessengerMessage(convo.contactId, text);
+        else throw new Error(`unknown chat platform: ${convo.platform}`);
+        convo.messages.push({ direction: 'out', text, at: Date.now(), agentName });
+        if (convo.messages.length > CHAT_MESSAGES_PER_CONVO_LIMIT) convo.messages.shift();
+        convo.lastMessageAt = Date.now();
+        convo.unread = false;
+        broadcastChatUpdate(convo);
+        store.persistChat(convo).catch(() => {});
+      } catch (err) {
+        console.error('[chat] send failed:', err.message);
+        conn.send({ type: 'chat-send-failed', conversationId: convo.id, error: err.message });
+      }
     }
   };
 
@@ -622,6 +778,26 @@ const server = http.createServer((req, res) => {
       sendJson(res, 500, { error: 'internal error' });
     });
     return;
+  }
+  if (urlObj.pathname === '/webhooks/whatsapp') {
+    if (req.method === 'GET') { handleWebhookVerify(req, res, urlObj); return; }
+    if (req.method === 'POST') {
+      handleWhatsAppWebhookPost(req, res).catch((err) => {
+        console.error('[webhook] WhatsApp: unhandled error:', err);
+        try { res.writeHead(500).end(); } catch { /* response already sent */ }
+      });
+      return;
+    }
+  }
+  if (urlObj.pathname === '/webhooks/messenger') {
+    if (req.method === 'GET') { handleWebhookVerify(req, res, urlObj); return; }
+    if (req.method === 'POST') {
+      handleMessengerWebhookPost(req, res).catch((err) => {
+        console.error('[webhook] Messenger: unhandled error:', err);
+        try { res.writeHead(500).end(); } catch { /* response already sent */ }
+      });
+      return;
+    }
   }
   serveStatic(req, res);
 });
@@ -699,13 +875,24 @@ async function main() {
 
   AGENTS = await store.loadAgents(AGENTS);
   callLog.push(...await store.loadCallLog());
+  for (const c of await store.loadChats()) chatConversations.set(c.id, c);
+
+  if (chat.whatsappConfigured || chat.messengerConfigured) {
+    if (!chat.webhooksConfigured) {
+      console.log('[chat] WARNING: a send channel (WhatsApp/Messenger) is configured but META_APP_SECRET / META_WEBHOOK_VERIFY_TOKEN is missing — incoming messages will be rejected until both are set. See the README.');
+    } else {
+      console.log(`[chat] enabled: ${[chat.whatsappConfigured && 'WhatsApp', chat.messengerConfigured && 'Messenger'].filter(Boolean).join(' + ')}. Webhook URLs: /webhooks/whatsapp, /webhooks/messenger`);
+    }
+  } else {
+    console.log('[chat] WhatsApp/Messenger not configured — the Chats tab in the agent dashboard will stay empty until you set it up (see README).');
+  }
 
   server.listen(PORT, () => {
     console.log(`Virtual Front Desk listening on http://localhost:${PORT}`);
     console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
     console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
     console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
-    console.log(`  Loaded ${AGENTS.length} agent(s) and ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}.`);
+    console.log(`  Loaded ${AGENTS.length} agent(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
   });
 }
 

@@ -24,6 +24,12 @@
     <header class="topbar">
       <div class="topbar-left">
         <span class="logo">🛎️ Virtual Front Desk</span>
+        <div class="view-tabs">
+          <button id="tab-calls" class="view-tab active" data-view="calls">📹 Calls</button>
+          <button id="tab-chats" class="view-tab" data-view="chats">
+            💬 Chats <span id="chat-unread-badge" class="count-badge hidden">0</span>
+          </button>
+        </div>
       </div>
       <div class="topbar-right">
         <span id="agent-status-dot" class="status-dot"></span>
@@ -31,7 +37,7 @@
       </div>
     </header>
 
-    <main class="layout">
+    <main id="view-calls" class="layout view active">
       <aside class="queue-panel">
         <h2>Waiting <span id="queue-count" class="count-badge">0</span></h2>
         <div id="queue-list" class="queue-list">
@@ -67,6 +73,35 @@
             </div>
           </div>
           <textarea id="call-notes" placeholder="Notes for this call (saved automatically)…"></textarea>
+        </div>
+      </section>
+    </main>
+
+    <main id="view-chats" class="layout view">
+      <aside class="queue-panel">
+        <h2>Conversations</h2>
+        <div id="chats-list" class="queue-list">
+          <p class="empty-note">No conversations yet. Messages guests send to WhatsApp or Facebook will show up here.</p>
+        </div>
+      </aside>
+
+      <section class="call-panel">
+        <div id="no-thread-placeholder" class="no-call">
+          <div class="no-call-icon">💬</div>
+          <p>Select a conversation to view messages.</p>
+        </div>
+
+        <div id="active-thread" class="active-thread hidden">
+          <div class="thread-header">
+            <span id="thread-platform-icon">💬</span>
+            <strong id="thread-contact-label">—</strong>
+          </div>
+          <div id="thread-messages" class="thread-messages"></div>
+          <p id="thread-send-error" class="error hidden"></p>
+          <form id="thread-reply-form" class="thread-reply-form">
+            <textarea id="thread-reply-text" placeholder="Type a reply…" maxlength="2000"></textarea>
+            <button type="submit" class="btn btn-primary">Send</button>
+          </form>
         </div>
       </section>
     </main>

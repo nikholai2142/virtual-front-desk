@@ -144,6 +144,57 @@ async function appendCallLogEntry(entry) {
   }
 }
 
+// ---- Chat conversations (WhatsApp / Messenger) ----------------------------
+// Each conversation is its own key, plus a set of conversation ids so we
+// can list them all — this avoids relying on Redis's HGETALL response
+// shape, which varies enough across REST wrappers that GET/SET/SADD/
+// SMEMBERS (already used above, and already proven to work) is the safer
+// bet here.
+
+const CHAT_IDS_KEY = 'vfd:chat:ids';
+function chatKey(id) {
+  return `vfd:chat:${id}`;
+}
+
+/** Loads every persisted chat conversation. Returns [] if not configured/unreachable. */
+async function loadChats() {
+  if (!configured) return [];
+  try {
+    const ids = await redisCommand(['SMEMBERS', CHAT_IDS_KEY]);
+    connected = true;
+    if (!ids || !ids.length) return [];
+    const conversations = [];
+    for (const id of ids) {
+      try {
+        const raw = await redisCommand(['GET', chatKey(id)]);
+        if (raw) conversations.push(JSON.parse(raw));
+      } catch (err) {
+        console.error(`[store] could not load chat conversation ${id}, skipping it:`, err.message);
+      }
+    }
+    return conversations;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load chat conversations from Redis, starting empty:', err.message);
+    return [];
+  }
+}
+
+/** Saves one conversation (its full message history). Returns true if it actually reached Redis. */
+async function persistChat(conversation) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', chatKey(conversation.id), JSON.stringify(conversation)]);
+    await redisCommand(['SADD', CHAT_IDS_KEY, conversation.id]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save a chat conversation to Redis — it may be lost on the next restart:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   configured,
   checkConnection,
@@ -152,4 +203,6 @@ module.exports = {
   persistAgents,
   loadCallLog,
   appendCallLogEntry,
+  loadChats,
+  persistChat,
 };

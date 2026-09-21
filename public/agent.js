@@ -28,6 +28,8 @@ let noteDebounce = null;
 let knownQueueIds = new Set();
 let micOn = true;
 let camOn = true;
+let chatConversations = new Map(); // conversationId -> conversation
+let selectedChatId = null;
 let connectTimeoutHandle = null;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
 
@@ -123,6 +125,7 @@ function handleServerMessage(msg) {
       document.getElementById('agent-name-label').textContent = msg.name;
       showScreen('screen-dashboard');
       wsSend({ type: 'get-log' });
+      wsSend({ type: 'get-chats' });
       break;
 
     case 'agent-login-fail':
@@ -157,7 +160,104 @@ function handleServerMessage(msg) {
         wsSend({ type: 'get-log' });
       }
       break;
+
+    case 'chat-list':
+      chatConversations = new Map(msg.conversations.map((c) => [c.id, c]));
+      renderChatsList();
+      if (selectedChatId && chatConversations.has(selectedChatId)) renderThread(chatConversations.get(selectedChatId));
+      break;
+
+    case 'chat-update': {
+      const prev = chatConversations.get(msg.conversation.id);
+      const lastMsg = msg.conversation.messages[msg.conversation.messages.length - 1];
+      const isNewInbound = lastMsg && lastMsg.direction === 'in' &&
+        (!prev || msg.conversation.messages.length > prev.messages.length);
+      chatConversations.set(msg.conversation.id, msg.conversation);
+      renderChatsList();
+      if (selectedChatId === msg.conversation.id) renderThread(msg.conversation);
+      if (isNewInbound) beep();
+      break;
+    }
+
+    case 'chat-send-failed': {
+      const errEl = document.getElementById('thread-send-error');
+      errEl.textContent = 'Could not send: ' + msg.error;
+      errEl.classList.remove('hidden');
+      break;
+    }
   }
+}
+
+function chatDisplayName(convo) {
+  if (convo.contactName) return convo.contactName;
+  if (convo.platform === 'whatsapp') return convo.contactId;
+  return `Messenger guest •${convo.contactId.slice(-4)}`;
+}
+
+function renderChatsList() {
+  const list = document.getElementById('chats-list');
+  const conversations = [...chatConversations.values()].sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+
+  const unreadCount = conversations.filter((c) => c.unread).length;
+  const badge = document.getElementById('chat-unread-badge');
+  if (unreadCount > 0) {
+    badge.textContent = unreadCount;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+
+  if (!conversations.length) {
+    list.innerHTML = '<p class="empty-note">No conversations yet. Messages guests send to WhatsApp or Facebook will show up here.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  conversations.forEach((c) => {
+    const last = c.messages[c.messages.length - 1];
+    const div = document.createElement('div');
+    div.className = 'chat-item' + (c.unread ? ' unread' : '') + (c.id === selectedChatId ? ' selected' : '');
+    const icon = c.platform === 'whatsapp' ? '🟢' : '🔵';
+    div.innerHTML = `
+      <div class="ci-top">
+        <span class="ci-name"><span class="ci-platform">${icon}</span>${escapeHtml(chatDisplayName(c))}${c.unread ? '<span class="unread-dot"></span>' : ''}</span>
+        <span class="ci-time">${last ? new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+      </div>
+      <div class="ci-preview">${last ? escapeHtml(last.text) : ''}</div>
+    `;
+    div.addEventListener('click', () => selectChat(c.id));
+    list.appendChild(div);
+  });
+}
+
+function selectChat(id) {
+  selectedChatId = id;
+  const convo = chatConversations.get(id);
+  if (!convo) return;
+  renderChatsList();
+  renderThread(convo);
+  if (convo.unread) wsSend({ type: 'chat-mark-read', conversationId: id });
+}
+
+function renderThread(convo) {
+  document.getElementById('no-thread-placeholder').classList.add('hidden');
+  document.getElementById('active-thread').classList.remove('hidden');
+  document.getElementById('thread-send-error').classList.add('hidden');
+  document.getElementById('thread-platform-icon').textContent = convo.platform === 'whatsapp' ? '🟢' : '🔵';
+  const platformLabel = convo.platform === 'whatsapp' ? 'WhatsApp' : 'Messenger';
+  document.getElementById('thread-contact-label').textContent = `${chatDisplayName(convo)} (${platformLabel})`;
+
+  const box = document.getElementById('thread-messages');
+  box.innerHTML = '';
+  convo.messages.forEach((m) => {
+    const div = document.createElement('div');
+    div.className = 'msg-bubble ' + m.direction;
+    const time = new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const agentTag = m.direction === 'out' && m.agentName ? `<span class="msg-agent">${escapeHtml(m.agentName)}</span>` : '';
+    div.innerHTML = `${agentTag}${escapeHtml(m.text)}<span class="msg-time">${time}</span>`;
+    box.appendChild(div);
+  });
+  box.scrollTop = box.scrollHeight;
 }
 
 function renderQueue(queue) {
@@ -339,4 +439,23 @@ document.getElementById('call-notes').addEventListener('input', (e) => {
 
 window.addEventListener('beforeunload', () => {
   if (currentCallId) wsSend({ type: 'end-call', callId: currentCallId });
+});
+
+document.querySelectorAll('.view-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.view-tab').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('.layout.view').forEach((v) => v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`view-${btn.dataset.view}`).classList.add('active');
+  });
+});
+
+document.getElementById('thread-reply-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const textEl = document.getElementById('thread-reply-text');
+  const text = textEl.value.trim();
+  if (!text || !selectedChatId) return;
+  document.getElementById('thread-send-error').classList.add('hidden');
+  wsSend({ type: 'send-chat-reply', conversationId: selectedChatId, text });
+  textEl.value = '';
 });

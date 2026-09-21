@@ -8,15 +8,17 @@ Three screens, one server:
 
 - **Kiosk** (`/`) — the guest-facing screen for a lobby tablet.
 - **Agent Dashboard** (`/agent`) — where remote staff sign in, watch the
-  queue, and take calls.
+  queue, take calls, and (optionally) handle WhatsApp/Facebook Messenger
+  chats from guests.
 - **Admin Dashboard** (`/admin`) — where a manager adds/removes agents and
   checks each agent's call performance.
 
 Zero npm dependencies. The signaling server is plain Node (built-in `http`
-module, plus a small hand-rolled WebSocket implementation), and persistence
-(see below) talks to Upstash Redis over plain HTTPS using the `fetch` Node
-already has built in — so `npm install` isn't needed and there's nothing to
-audit beyond this repo.
+module, plus a small hand-rolled WebSocket implementation), and everything
+that talks to an outside service — Upstash Redis for persistence, Meta's
+Graph API for WhatsApp/Messenger — does it over plain HTTPS using the
+`fetch` Node already has built in. No `npm install`, nothing to audit
+beyond this repo.
 
 ## How it works
 
@@ -168,7 +170,138 @@ immediately, and will still be there after any restart or redeploy.
 just falls back to memory-only agents/history, and the admin dashboard's
 note will say persistent storage isn't set up.
 
-## What's real vs. what's stubbed (read before deploying)
+## WhatsApp & Facebook chat
+
+Alongside video calls, agents can also handle **WhatsApp and Facebook
+Messenger text chats** from a "Chats" tab in `/agent` — a guest messages
+your hotel's WhatsApp number or Facebook Page, and it shows up live in the
+dashboard for any signed-in agent to reply to, with the full conversation
+saved (persisted to Redis if you've set that up above).
+
+This talks directly to Meta's own APIs — no third-party service, no
+monthly fee for the messaging itself. But it does mean creating a Meta
+Developer App yourself, which is the longest part of this setup, and
+**there's a hard limit you should know before you start**: until Meta
+approves your app for these permissions (App Review + Business
+Verification), you can only message/receive from a short list of test
+accounts you add yourself — not real, random guests. Testing end-to-end
+works immediately; going live for actual hotel guests needs that approval,
+which can take Meta several days to a couple of weeks. Plan around that if
+you're hoping to launch this by a specific date.
+
+Each channel — WhatsApp, Messenger — is independent: set up just one if
+that's all you need, and add the other later. Neither requires touching
+the code again, only environment variables.
+
+### 1. Create a Meta Developer App
+
+1. Go to [developers.facebook.com](https://developers.facebook.com) and
+   log in with the same Facebook account you used for Business Suite.
+2. Click **My Apps** → **Create App**.
+3. Choose the **Business** app type, give it a name (e.g. "Hotel Front
+   Desk Chat"), and associate it with the Business Portfolio you created
+   earlier (Meta will offer to link it).
+4. On the app's dashboard, find **WhatsApp** and **Messenger** in the
+   product list and click **Set Up** on each one you want.
+
+### 2. Set up WhatsApp
+
+1. Under **WhatsApp → API Setup**, Meta gives you a free test phone
+   number and a temporary access token immediately — enough to try
+   everything below without your own number. Add your own phone as a
+   "recipient number" on that page so you can send yourself test
+   messages.
+2. Note the **Phone number ID** shown on that page (not the phone number
+   itself) — that's `WHATSAPP_PHONE_NUMBER_ID`.
+3. The temporary access token shown there works for 24 hours — fine for
+   testing, not for a real deployment. For one that doesn't expire: go to
+   [business.facebook.com/settings](https://business.facebook.com/settings)
+   → **System Users** → create one → assign it to your WhatsApp Business
+   Account → generate a token for it with the `whatsapp_business_messaging`
+   permission and no expiration. That's `WHATSAPP_ACCESS_TOKEN`.
+4. When you're ready to use your own hotel number instead of the test
+   one: same **API Setup** page → **Add phone number** → verify it by SMS
+   or voice call.
+
+### 3. Set up Messenger
+
+1. Under **Messenger → Settings → Access Tokens**, connect the Facebook
+   Page you created for Business Suite.
+2. Generate a **Page Access Token** — that's `MESSENGER_PAGE_ACCESS_TOKEN`.
+
+### 4. Get your App Secret
+
+In the app dashboard, go to **Settings → Basic**, click **Show** next to
+**App Secret** (it'll ask you to re-enter your Facebook password). That's
+`META_APP_SECRET` — it's what lets the server verify an incoming webhook
+really came from Meta and not someone else who found your URL.
+
+### 5. Configure the webhook
+
+1. Still in the app dashboard, find **Webhooks** (in the sidebar, or under
+   each product's own settings).
+2. For WhatsApp: set the **Callback URL** to
+   `https://<your-render-url>/webhooks/whatsapp`, and **Verify Token** to
+   any string you make up yourself — that's `META_WEBHOOK_VERIFY_TOKEN`
+   (you can reuse the same one for Messenger below). Click **Verify and
+   Save**, then subscribe to the **messages** field.
+3. For Messenger: same Callback URL pattern but
+   `https://<your-render-url>/webhooks/messenger`, same verify token,
+   subscribe to **messages**, and select the Facebook Page to receive
+   messages for.
+
+(Your server needs to already be deployed and running for "Verify and
+Save" to succeed, since Meta calls that URL immediately to check it.)
+
+### 6. Add the environment variables to Render
+
+Same place as the Upstash variables earlier: your Render service →
+**Environment** → add whichever of these apply to the channel(s) you set
+up:
+
+| Variable | Where it came from |
+|---|---|
+| `WHATSAPP_ACCESS_TOKEN` | WhatsApp system user token (step 2.3) |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp API Setup page (step 2.2) |
+| `MESSENGER_PAGE_ACCESS_TOKEN` | Messenger access tokens page (step 3.2) |
+| `META_APP_SECRET` | App Settings → Basic (step 4) |
+| `META_WEBHOOK_VERIFY_TOKEN` | a string you invented yourself (step 5.2) |
+
+Save, let Render redeploy, and upload `server.js`, `chat.js`, and the
+changed `public/agent.*` files to GitHub if you haven't already.
+
+### 7. Test it
+
+Send a WhatsApp message from the phone number you added as a test
+recipient, or message the Facebook Page from your own account — both
+should appear in `/agent`'s Chats tab within a second or two, with an
+unread badge and a notification sound. Reply from the dashboard and
+confirm it arrives on your phone.
+
+### Before this handles real guests
+
+- **App Review + Business Verification.** Covered above — without it,
+  only your manually-added test numbers (WhatsApp) and people with a role
+  on your Page/app (Messenger) can talk to this. Submit for review from
+  the app dashboard once you've tested everything works; Meta will ask
+  for a short video showing the flow.
+- **WhatsApp's 24-hour window.** You can only send a free-form text reply
+  within 24 hours of the guest's last message. Outside that window,
+  WhatsApp requires a pre-approved *template* message instead, which
+  this integration doesn't send — a reply attempted outside the window
+  will fail, and the dashboard shows Meta's error message when that
+  happens. For a front desk that's usually fine (guests message and wait
+  for a reply), but worth knowing if an agent tries to follow up on an
+  old conversation.
+- **Media messages aren't handled.** Photos, voice notes, and documents a
+  guest sends are currently skipped — only text messages show up. Common
+  guest questions (check-in time, wifi, directions) rarely need more than
+  text, but if you need this, `chat.js`'s `parseWhatsAppWebhook` /
+  `parseMessengerWebhook` is where to add it.
+- **No contact profile photos**, and Messenger contacts show as "Messenger
+  guest •1234" (the last 4 digits of their ID) since Messenger's
+  messaging webhook doesn't include a name and fetching one needs
+  additional permissions this integration doesn't request.
 
 ## What's real vs. what's stubbed (read before deploying)
 
@@ -220,14 +353,15 @@ in a real lobby:
 
 ```
 virtual-front-desk/
-├── server.js       Signaling server: WebSocket relay, queue, agent auth, admin API, static hosting
+├── server.js       Signaling server: WS relay, queue, agent auth, admin API, webhooks, static hosting
 ├── store.js        Persistence layer: Upstash Redis if configured, else local-only fallback
+├── chat.js         WhatsApp/Messenger: Graph API sending, webhook signature check + parsing
 ├── agents.json     Seed/fallback agent PINs/names — real source of truth is Redis once configured
 ├── admin.json      Admin dashboard password (default "letmein" — change this)
 ├── package.json
 └── public/
     ├── kiosk.html / kiosk.css / kiosk.js   Guest-facing lobby screen
-    ├── agent.html / agent.css / agent.js   Agent dashboard
+    ├── agent.html / agent.css / agent.js   Agent dashboard (calls + WhatsApp/Messenger chats)
     └── admin.html / admin.css / admin.js   Admin dashboard (add/remove agents, view stats)
 ```
 
