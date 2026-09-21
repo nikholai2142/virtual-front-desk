@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Front Desk — Admin</title>
+<link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <section id="screen-login" class="screen active">
+    <form id="login-form" class="login-card">
+      <h1>Admin Sign-in</h1>
+      <p class="sub">Enter the admin password to continue.</p>
+      <input id="login-password" type="password" autocomplete="off" placeholder="Password" />
+      <button id="login-submit" type="submit" class="btn btn-primary">Sign In</button>
+      <p id="login-error" class="error hidden"></p>
+    </form>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="screen-dashboard" class="screen">
+    <header class="topbar">
+      <span class="logo">🛎️ Virtual Front Desk — Admin</span>
+      <div class="topbar-right">
+        <span id="totals-summary" class="totals-summary"></span>
+        <button id="btn-refresh" class="btn-small">Refresh</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <h2>Agents</h2>
+        <div id="agents-list" class="agents-list"></div>
+
+        <form id="add-agent-form" class="add-agent-form">
+          <h3>Add agent</h3>
+          <div class="add-agent-row">
+            <input id="new-agent-name" type="text" placeholder="Name" maxlength="60" />
+            <input id="new-agent-pin" type="text" inputmode="numeric" placeholder="PIN" maxlength="12" />
+            <button type="submit" class="btn btn-primary">Add</button>
+          </div>
+          <p id="add-agent-error" class="error hidden"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Performance</h2>
+        <p id="stats-note" class="stats-note"></p>
+        <div id="stats-table" class="stats-table"></div>
+      </section>
+    </main>
+  </section>
+
+  <script src="admin.js"></script>
+</body>
+</html>
