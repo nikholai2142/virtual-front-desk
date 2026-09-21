@@ -61,7 +61,13 @@ class WSConnection {
 
   _onData(chunk) {
     this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
-    this._parseFrames();
+    try {
+      this._parseFrames();
+    } catch (err) {
+      console.error('WS frame parse error, closing this connection:', err);
+      this._close();
+      try { this.socket.destroy(); } catch { /* already gone */ }
+    }
   }
 
   _parseFrames() {
@@ -435,16 +441,31 @@ const server = http.createServer((req, res) => {
   serveStatic(req, res);
 });
 
-server.on('upgrade', (req, socket) => {
+server.on('upgrade', (req, socket, head) => {
   if (req.url.startsWith('/ws')) {
     const role = new URL(req.url, 'http://x').searchParams.get('role');
     const conn = acceptWebSocket(req, socket);
     if (!conn) return;
     if (role === 'agent') handleAgentConnection(conn);
     else handleGuestConnection(conn);
+    // A proxy (Render's included) can forward bytes that arrived right after
+    // the upgrade request in the same read — Node's http parser captures
+    // those in `head` instead of re-emitting them as a 'data' event. Skipping
+    // this meant any client that sent its first frame quickly would have
+    // those bytes silently dropped, leaving the connection stuck forever.
+    if (head && head.length) conn._onData(head);
   } else {
     socket.destroy();
   }
+});
+
+// A parse error or handler bug on ONE connection should never take the
+// whole server down for every other guest/agent currently on a call.
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException (server kept running):', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('unhandledRejection (server kept running):', err);
 });
 
 // Keepalive pings so dead connections (network drop, closed laptop lid)
