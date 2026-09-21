@@ -82,12 +82,16 @@ html, body {
 }
 .empty-note { color: var(--sub); font-size: 13px; }
 
-.add-agent-row { display: flex; gap: 8px; }
+.add-agent-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .add-agent-row input {
-  flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+  flex: 1 1 120px; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
   background: #0e1526; color: var(--text); font-size: 14px; min-width: 0;
 }
-.add-agent-row button { flex-shrink: 0; }
+/* .btn-primary sets width:100% for the login button; override it here so
+   it doesn't also claim the whole row and crush the two inputs beside it. */
+.add-agent-row button {
+  flex: 0 0 auto; width: auto; white-space: nowrap; padding: 10px 20px;
+}
 
 .stats-note { color: var(--sub); font-size: 12px; margin: 0 0 14px; }
 .stats-table { display: flex; flex-direction: column; gap: 12px; }
