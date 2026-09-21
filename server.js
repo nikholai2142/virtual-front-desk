@@ -14,25 +14,62 @@ const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const store = require('./store');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // ---- Agent accounts (demo auth) --------------------------------------
 // Replace with real auth (SSO / PMS integration) before production use.
-const AGENTS = (() => {
+// Mutable (not const) because the admin dashboard can add/remove agents at
+// runtime. The source of truth is Upstash Redis (see store.js) when it's
+// configured — changes there survive a restart AND a fresh Render deploy.
+// agents.json is only the seed for a brand-new Redis database and a local
+// fallback when Redis isn't set up (e.g. running on your own machine).
+const AGENTS_FILE = path.join(__dirname, 'agents.json');
+function readLocalAgentsFile() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, 'agents.json'), 'utf8'));
+    return JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf8'));
   } catch {
     return [
       { pin: '1234', name: 'Alex' },
       { pin: '5678', name: 'Sam' },
     ];
   }
+}
+let AGENTS = readLocalAgentsFile(); // replaced with the real Redis-backed list during startup, see main() below
+
+/** Saves the current AGENTS array. Returns true only if it actually reached persistent storage. */
+async function saveAgents() {
+  try {
+    fs.writeFileSync(AGENTS_FILE, JSON.stringify(AGENTS, null, 2));
+  } catch (err) {
+    // Non-fatal either way — this local file is a convenience, not the
+    // source of truth, once Redis is configured.
+    console.error('Could not write agents.json locally (non-fatal):', err.message);
+  }
+  return store.persistAgents(AGENTS);
+}
+
+// ---- Admin dashboard auth ---------------------------------------------
+// One shared password, same demo-grade approach as the agent PINs — swap
+// for real auth before this handles anything that matters. Set your own
+// via admin.json ({ "password": "..." }) instead of editing this file.
+const ADMIN_FILE = path.join(__dirname, 'admin.json');
+const ADMIN_PASSWORD = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(ADMIN_FILE, 'utf8')).password;
+  } catch {
+    return 'letmein';
+  }
 })();
 
 const MAX_WAIT_WARN_MS = 60 * 1000; // client shows a "still connecting" notice
-const CALL_LOG_LIMIT = 200;
+// Only applies when Redis isn't configured — call history is then purely
+// in-memory (same as before), so it's capped to avoid unbounded growth.
+// With Redis configured, history is persisted and effectively unlimited
+// (store.js has its own much higher safety cap).
+const LOCAL_ONLY_CALL_LOG_LIMIT = 200;
 
 // ======================================================================
 // Minimal WebSocket server (RFC 6455), no dependencies.
@@ -230,6 +267,7 @@ function serveStatic(req, res) {
   let reqPath = decodeURIComponent(req.url.split('?')[0]);
   if (reqPath === '/') reqPath = '/kiosk.html';
   if (reqPath === '/agent') reqPath = '/agent.html';
+  if (reqPath === '/admin') reqPath = '/admin.html';
   const filePath = path.normalize(path.join(PUBLIC_DIR, reqPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403).end('Forbidden');
@@ -290,7 +328,7 @@ function endCall(callId, reason) {
   }
 
   if (call.answeredAt) {
-    callLog.push({
+    const entry = {
       callId,
       topic: call.topic,
       agentName: call.agentName || null,
@@ -299,10 +337,137 @@ function endCall(callId, reason) {
       endedAt: Date.now(),
       notes: call.notes || '',
       outcome: reason,
-    });
-    if (callLog.length > CALL_LOG_LIMIT) callLog.shift();
+    };
+    callLog.push(entry);
+    // Without Redis, history is memory-only, so keep it bounded like before.
+    // With Redis, the persisted copy is the real "all-time" record; the
+    // in-memory array just mirrors it for fast reads within this process.
+    if (!store.configured && callLog.length > LOCAL_ONLY_CALL_LOG_LIMIT) callLog.shift();
+    // Fire-and-forget: ending a call should never wait on a network round
+    // trip to Redis. Failures are logged inside store.js, not thrown here.
+    store.appendCallLogEntry(entry).catch(() => {});
   }
   broadcastQueue();
+}
+
+// ======================================================================
+// Admin API — manage agents and view performance.
+// ======================================================================
+// Auth is a single shared password sent as `X-Admin-Password` on every
+// request (no sessions/cookies — this is a small internal tool, not a
+// public-facing login system). Swap for real auth before this matters.
+
+function computeAgentStats() {
+  const byAgent = new Map(); // name -> { calls, totalTalkSeconds, topics: Map, lastCallAt }
+  for (const entry of callLog) {
+    const name = entry.agentName || 'Unknown';
+    if (!byAgent.has(name)) {
+      byAgent.set(name, { agentName: name, calls: 0, totalTalkSeconds: 0, topics: new Map(), lastCallAt: 0 });
+    }
+    const stat = byAgent.get(name);
+    stat.calls += 1;
+    stat.totalTalkSeconds += Math.max(0, Math.round((entry.endedAt - entry.answeredAt) / 1000));
+    stat.topics.set(entry.topic, (stat.topics.get(entry.topic) || 0) + 1);
+    stat.lastCallAt = Math.max(stat.lastCallAt, entry.endedAt);
+  }
+  // Include agents with zero calls too, so a brand-new agent shows up at 0 rather than being absent.
+  for (const a of AGENTS) {
+    if (!byAgent.has(a.name)) {
+      byAgent.set(a.name, { agentName: a.name, calls: 0, totalTalkSeconds: 0, topics: new Map(), lastCallAt: 0 });
+    }
+  }
+  return [...byAgent.values()]
+    .map((s) => ({
+      agentName: s.agentName,
+      calls: s.calls,
+      totalTalkSeconds: s.totalTalkSeconds,
+      avgTalkSeconds: s.calls ? Math.round(s.totalTalkSeconds / s.calls) : 0,
+      topTopic: [...s.topics.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+      lastCallAt: s.lastCallAt || null,
+    }))
+    .sort((a, b) => b.calls - a.calls);
+}
+
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 1e6) { reject(new Error('body too large')); req.destroy(); }
+    });
+    req.on('end', () => {
+      if (!data) return resolve({});
+      try { resolve(JSON.parse(data)); } catch (err) { reject(err); }
+    });
+    req.on('error', reject);
+  });
+}
+
+async function handleAdminApi(req, res, urlObj) {
+  if (req.headers['x-admin-password'] !== ADMIN_PASSWORD) {
+    sendJson(res, 401, { error: 'unauthorized' });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/agents' && req.method === 'GET') {
+    sendJson(res, 200, { agents: AGENTS });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/agents' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const name = String(body.name || '').trim().slice(0, 60);
+    const pin = String(body.pin || '').trim().slice(0, 12);
+    if (!name || !pin) { sendJson(res, 400, { error: 'name and pin are both required' }); return; }
+    if (AGENTS.some((a) => a.pin === pin)) { sendJson(res, 409, { error: 'that PIN is already in use' }); return; }
+    AGENTS.push({ name, pin });
+    const persisted = await saveAgents();
+    sendJson(res, 201, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const deleteMatch = urlObj.pathname.match(/^\/api\/admin\/agents\/([^/]+)$/);
+  if (deleteMatch && req.method === 'DELETE') {
+    const pin = decodeURIComponent(deleteMatch[1]);
+    const before = AGENTS.length;
+    AGENTS = AGENTS.filter((a) => a.pin !== pin);
+    if (AGENTS.length === before) { sendJson(res, 404, { error: 'no agent with that PIN' }); return; }
+    const persisted = await saveAgents();
+    sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/stats' && req.method === 'GET') {
+    const storageStatus = store.getStatus();
+    let note;
+    if (!storageStatus.configured) {
+      note = `Persistent storage isn't set up, so this only covers the last ${LOCAL_ONLY_CALL_LOG_LIMIT} calls and resets whenever the server restarts. See the README's "Persistent storage" section to make it permanent.`;
+    } else if (storageStatus.connected) {
+      note = 'Stats cover all-time call history, persisted to Redis — this survives restarts and redeploys.';
+    } else {
+      note = 'Persistent storage is configured but not reachable right now, so this may be missing recent history and changes might not be saved. Check the Upstash database and the server logs.';
+    }
+    sendJson(res, 200, {
+      agents: computeAgentStats(),
+      totals: {
+        calls: callLog.length,
+        agentsOnline: agentConns.size,
+        guestsWaiting: queue.length,
+        activeCalls: calls.size,
+      },
+      storage: storageStatus,
+      note,
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'not found' });
 }
 
 function handleGuestConnection(conn) {
@@ -450,6 +615,14 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, queue: queue.length, activeCalls: calls.size, agents: agentConns.size }));
     return;
   }
+  const urlObj = new URL(req.url, 'http://x');
+  if (urlObj.pathname.startsWith('/api/admin/')) {
+    handleAdminApi(req, res, urlObj).catch((err) => {
+      console.error('[admin api] error:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    });
+    return;
+  }
   serveStatic(req, res);
 });
 
@@ -506,8 +679,37 @@ setInterval(() => {
   for (const c of allConns) c.ping();
 }, 20000).unref();
 
-server.listen(PORT, () => {
-  console.log(`Virtual Front Desk listening on http://localhost:${PORT}`);
-  console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
-  console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
+// ======================================================================
+// Startup — load agents + call history from persistent storage (if
+// configured) before accepting any connections, so the very first agent
+// login or admin dashboard view already sees the real, durable state.
+// ======================================================================
+
+async function main() {
+  if (store.configured) {
+    const connected = await store.checkConnection();
+    if (connected) {
+      console.log('[store] connected to Upstash Redis — agents and call history will persist across restarts and redeploys.');
+    } else {
+      console.log('[store] Upstash Redis is configured but not reachable right now — starting with local/in-memory data; will retry persisting on the next change.');
+    }
+  } else {
+    console.log('[store] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not set — running without persistent storage (agents.json + in-memory call history only, see README).');
+  }
+
+  AGENTS = await store.loadAgents(AGENTS);
+  callLog.push(...await store.loadCallLog());
+
+  server.listen(PORT, () => {
+    console.log(`Virtual Front Desk listening on http://localhost:${PORT}`);
+    console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
+    console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
+    console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
+    console.log(`  Loaded ${AGENTS.length} agent(s) and ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}.`);
+  });
+}
+
+main().catch((err) => {
+  console.error('Fatal error during startup:', err);
+  process.exit(1);
 });
