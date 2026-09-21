@@ -1,0 +1,165 @@
+:root {
+  --bg: #0b1220;
+  --panel: #121b2e;
+  --accent: #2f6fed;
+  --accent-2: #1e4fb8;
+  --text: #f3f6fb;
+  --sub: #9fb0cc;
+  --danger: #e5484d;
+  --good: #22c55e;
+  --radius: 20px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+.screen.active { display: flex; }
+
+.brand-mark { font-size: 64px; margin-bottom: 8px; }
+h1 { font-size: 44px; margin: 0 0 8px; }
+h2 { font-size: 30px; margin: 16px 0 4px; }
+.sub { color: var(--sub); font-size: 18px; margin: 0 0 24px; }
+.footnote { position: absolute; bottom: 32px; color: var(--sub); font-size: 16px; }
+
+.dept-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  width: 100%;
+  max-width: 720px;
+  margin-top: 16px;
+}
+.dept-btn {
+  background: var(--panel);
+  border: 1px solid #223255;
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 32px 16px;
+  font-size: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+.dept-btn:active { transform: scale(0.96); background: var(--accent-2); }
+.dept-icon { font-size: 40px; }
+
+.center-card {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.spinner {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  border: 5px solid #223255;
+  border-top-color: var(--accent);
+  animation: spin 1s linear infinite;
+  margin-bottom: 24px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.warning {
+  background: #3a2a12;
+  color: #f6c76a;
+  border: 1px solid #5a4520;
+  border-radius: 12px;
+  padding: 14px 18px;
+  font-size: 16px;
+  max-width: 480px;
+}
+.hidden { display: none !important; }
+
+.btn {
+  border: none;
+  border-radius: 14px;
+  padding: 16px 32px;
+  font-size: 18px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-ghost { background: transparent; color: var(--sub); border: 1px solid #2a3a5c; }
+
+.check-mark {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: var(--good); color: #06210f;
+  font-size: 36px; display: flex; align-items: center; justify-content: center;
+  margin-bottom: 12px;
+}
+.err-mark {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: var(--danger); color: #2a0505;
+  font-size: 36px; font-weight: bold; display: flex; align-items: center; justify-content: center;
+  margin-bottom: 12px;
+}
+
+/* ---- Call screen ---- */
+.call-wrap {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  padding: 0;
+}
+#remote-video {
+  width: 100%; height: 100%; object-fit: cover;
+  background: #000;
+}
+#local-video {
+  position: absolute;
+  bottom: 110px; right: 24px;
+  width: 22vw; max-width: 220px;
+  border-radius: 14px;
+  border: 2px solid rgba(255,255,255,0.25);
+  object-fit: cover;
+  transform: scaleX(-1);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.call-topbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 20px 28px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.65), transparent);
+  font-size: 20px;
+}
+.call-controls {
+  position: absolute;
+  bottom: 24px; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 20px;
+}
+.ctrl-btn {
+  width: 68px; height: 68px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.14);
+  color: white;
+  font-size: 26px;
+  cursor: pointer;
+}
+.ctrl-btn.off { background: rgba(255,255,255,0.35); }
+.ctrl-end { background: var(--danger); }

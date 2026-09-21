@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Front Desk — Agent Dashboard</title>
+<link rel="stylesheet" href="agent.css" />
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <section id="screen-login" class="screen active">
+    <form id="login-form" class="login-card">
+      <h1>Agent Sign-in</h1>
+      <p class="sub">Enter your PIN to go online.</p>
+      <input id="login-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" maxlength="12" />
+      <button type="submit" class="btn btn-primary">Sign In</button>
+      <p id="login-error" class="error hidden">Incorrect PIN. Try again.</p>
+    </form>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="screen-dashboard" class="screen">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="logo">🛎️ Virtual Front Desk</span>
+      </div>
+      <div class="topbar-right">
+        <span id="agent-status-dot" class="status-dot"></span>
+        <span id="agent-name-label">—</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="queue-panel">
+        <h2>Waiting <span id="queue-count" class="count-badge">0</span></h2>
+        <div id="queue-list" class="queue-list">
+          <p class="empty-note">No guests waiting.</p>
+        </div>
+
+        <h2 class="log-heading">Recent calls</h2>
+        <div id="call-log" class="call-log">
+          <p class="empty-note">No calls yet.</p>
+        </div>
+      </aside>
+
+      <section class="call-panel">
+        <div id="no-call-placeholder" class="no-call">
+          <div class="no-call-icon">📹</div>
+          <p>No active call. Answer a guest from the queue to begin.</p>
+        </div>
+
+        <div id="active-call" class="active-call hidden">
+          <div class="video-stage">
+            <video id="remote-video" autoplay playsinline></video>
+            <video id="local-video" autoplay playsinline muted></video>
+          </div>
+          <div class="call-meta">
+            <div>
+              <strong id="call-topic-label">—</strong>
+              <span id="call-timer-label">0:00</span>
+            </div>
+            <div class="call-buttons">
+              <button id="btn-toggle-mic" class="ctrl-btn" title="Mute/unmute">🎤</button>
+              <button id="btn-toggle-cam" class="ctrl-btn" title="Camera on/off">📷</button>
+              <button id="btn-end-call" class="ctrl-btn ctrl-end" title="End call">End Call</button>
+            </div>
+          </div>
+          <textarea id="call-notes" placeholder="Notes for this call (saved automatically)…"></textarea>
+        </div>
+      </section>
+    </main>
+  </section>
+
+  <script src="agent.js"></script>
+</body>
+</html>

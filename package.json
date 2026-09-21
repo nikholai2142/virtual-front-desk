@@ -1,0 +1,15 @@
+{
+  "name": "virtual-front-desk",
+  "version": "1.0.0",
+  "description": "Video-call virtual front desk: lobby kiosk + agent dashboard, zero dependencies.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["hotel", "video", "webrtc", "front-desk"],
+  "author": "",
+  "license": "ISC"
+}

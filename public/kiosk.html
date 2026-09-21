@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Front Desk — Video Concierge</title>
+<link rel="stylesheet" href="kiosk.css" />
+</head>
+<body>
+
+  <!-- IDLE: department picker -->
+  <section id="screen-idle" class="screen active">
+    <div class="brand">
+      <div class="brand-mark">🛎️</div>
+      <h1>How can we help you today?</h1>
+      <p class="sub">Tap a department to start a video call with our team.</p>
+    </div>
+    <div class="dept-grid">
+      <button class="dept-btn" data-topic="Front Desk">
+        <span class="dept-icon">🧳</span><span>Front Desk</span>
+      </button>
+      <button class="dept-btn" data-topic="Concierge">
+        <span class="dept-icon">🗺️</span><span>Concierge</span>
+      </button>
+      <button class="dept-btn" data-topic="Housekeeping">
+        <span class="dept-icon">🧺</span><span>Housekeeping</span>
+      </button>
+      <button class="dept-btn" data-topic="Maintenance">
+        <span class="dept-icon">🔧</span><span>Maintenance</span>
+      </button>
+    </div>
+    <p class="footnote">Prefer to call? Dial <strong>0</strong> from your room phone.</p>
+  </section>
+
+  <!-- PERMISSION / CONNECTING -->
+  <section id="screen-connecting" class="screen">
+    <div class="center-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2 id="connecting-title">Requesting camera access…</h2>
+      <p id="connecting-sub" class="sub">Please allow camera and microphone access to continue.</p>
+      <button id="btn-cancel-connecting" class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- WAITING FOR AGENT -->
+  <section id="screen-waiting" class="screen">
+    <div class="center-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>Connecting you to the next available agent…</h2>
+      <p class="sub"><span id="waiting-topic"></span> · waiting <span id="waiting-time">0:00</span></p>
+      <p id="waiting-warning" class="warning hidden">This is taking longer than usual. You're welcome to keep waiting, or dial <strong>0</strong> from a house phone.</p>
+      <button id="btn-cancel-waiting" class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- IN CALL -->
+  <section id="screen-call" class="screen">
+    <div class="call-wrap">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div class="call-topbar">
+        <span id="call-agent-name">Connecting…</span>
+        <span id="call-timer">0:00</span>
+      </div>
+      <div class="call-controls">
+        <button id="btn-toggle-mic" class="ctrl-btn" aria-label="Toggle microphone">🎤</button>
+        <button id="btn-toggle-cam" class="ctrl-btn" aria-label="Toggle camera">📷</button>
+        <button id="btn-hangup" class="ctrl-btn ctrl-end" aria-label="End call">📞</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ENDED -->
+  <section id="screen-ended" class="screen">
+    <div class="center-card">
+      <div class="check-mark">✓</div>
+      <h2>Thanks for stopping by!</h2>
+      <p class="sub" id="ended-message">We hope we could help. Have a great stay.</p>
+    </div>
+  </section>
+
+  <!-- ERROR -->
+  <section id="screen-error" class="screen">
+    <div class="center-card">
+      <div class="err-mark">!</div>
+      <h2 id="error-title">Something went wrong</h2>
+      <p class="sub" id="error-message">Please try again, or dial 0 from a house phone.</p>
+      <button id="btn-error-retry" class="btn btn-primary">Try Again</button>
+    </div>
+  </section>
+
+  <script src="kiosk.js"></script>
+</body>
+</html>
