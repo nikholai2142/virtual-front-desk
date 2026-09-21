@@ -38,7 +38,7 @@ const CALL_LOG_LIMIT = 200;
 // Minimal WebSocket server (RFC 6455), no dependencies.
 // ======================================================================
 
-const WS_MAGIC = '258EAFA35E-4E45-9E82-C4C4F53F87BA';
+const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 class WSConnection {
   constructor(socket) {
