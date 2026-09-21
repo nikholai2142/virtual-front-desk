@@ -37,22 +37,67 @@ function beep() {
   } catch { /* ignore */ }
 }
 
-function connectWS(pin) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws?role=agent`);
+const LOGIN_TIMEOUT_MS = 20000; // Render free-tier cold starts can take ~30-60s;
+                                 // this at least turns a silent hang into a visible message.
+let loginInProgress = false;
+let loginTimeoutHandle = null;
 
-  ws.addEventListener('open', () => {
-    ws.send(JSON.stringify({ type: 'agent-login', pin }));
+function setLoginBusy(busy) {
+  const btn = document.getElementById('login-submit');
+  btn.disabled = busy;
+  btn.textContent = busy ? 'Connecting…' : 'Sign In';
+}
+
+function showLoginError(text) {
+  loginInProgress = false;
+  clearTimeout(loginTimeoutHandle);
+  setLoginBusy(false);
+  const el = document.getElementById('login-error');
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+function connectWS(pin) {
+  loginInProgress = true;
+  setLoginBusy(true);
+  document.getElementById('login-error').classList.add('hidden');
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  let socket;
+  try {
+    socket = new WebSocket(`${proto}://${location.host}/ws?role=agent`);
+  } catch {
+    showLoginError('Could not start a connection. Check the URL and try again.');
+    return;
+  }
+  ws = socket;
+
+  clearTimeout(loginTimeoutHandle);
+  loginTimeoutHandle = setTimeout(() => {
+    if (loginInProgress) {
+      showLoginError('No response from the server after 20s. If this app was asleep it can take up to a minute to wake up — try again.');
+      try { socket.close(); } catch { /* ignore */ }
+    }
+  }, LOGIN_TIMEOUT_MS);
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'agent-login', pin }));
   });
 
-  ws.addEventListener('message', (evt) => {
+  socket.addEventListener('message', (evt) => {
     let msg;
     try { msg = JSON.parse(evt.data); } catch { return; }
     handleServerMessage(msg);
   });
 
-  ws.addEventListener('close', () => {
-    if (screens['screen-dashboard'].classList.contains('active')) {
+  socket.addEventListener('error', () => {
+    if (loginInProgress) showLoginError('Connection error. Please try again.');
+  });
+
+  socket.addEventListener('close', () => {
+    if (loginInProgress) {
+      showLoginError('Connection closed before signing in. Please try again.');
+    } else if (screens['screen-dashboard'].classList.contains('active')) {
       document.getElementById('agent-status-dot').style.background = '#e5484d';
     }
   });
@@ -65,13 +110,16 @@ function wsSend(obj) {
 function handleServerMessage(msg) {
   switch (msg.type) {
     case 'agent-login-ok':
+      loginInProgress = false;
+      clearTimeout(loginTimeoutHandle);
+      setLoginBusy(false);
       document.getElementById('agent-name-label').textContent = msg.name;
       showScreen('screen-dashboard');
       wsSend({ type: 'get-log' });
       break;
 
     case 'agent-login-fail':
-      document.getElementById('login-error').classList.remove('hidden');
+      showLoginError('Incorrect PIN. Try again.');
       break;
 
     case 'queue-update':
