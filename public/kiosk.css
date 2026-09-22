@@ -40,32 +40,39 @@ html, body {
 h1 { font-size: 44px; margin: 0 0 8px; }
 h2 { font-size: 30px; margin: 16px 0 4px; }
 .sub { color: var(--sub); font-size: 18px; margin: 0 0 24px; }
-.footnote { position: absolute; bottom: 32px; color: var(--sub); font-size: 16px; }
+.footnote { position: absolute; bottom: 32px; color: var(--sub); font-size: 16px; text-align: center; }
+.kiosk-id-footnote { font-size: 13px; opacity: 0.7; }
 
-.dept-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 24px;
-  width: 100%;
-  max-width: 720px;
-  margin-top: 16px;
-}
-.dept-btn {
-  background: var(--panel);
-  border: 1px solid #223255;
+.start-call-btn {
+  background: var(--accent);
+  border: none;
   border-radius: var(--radius);
-  color: var(--text);
-  padding: 32px 16px;
-  font-size: 22px;
+  color: white;
+  padding: 48px 72px;
+  font-size: 26px;
+  font-weight: 600;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   cursor: pointer;
+  margin-top: 16px;
   transition: transform .12s ease, background .12s ease;
 }
-.dept-btn:active { transform: scale(0.96); background: var(--accent-2); }
-.dept-icon { font-size: 40px; }
+.start-call-btn:active { transform: scale(0.96); background: var(--accent-2); }
+.dept-icon { font-size: 48px; }
+
+.link-btn-inline {
+  background: none; border: none; color: var(--sub); font-size: 13px;
+  text-decoration: underline; cursor: pointer; padding: 0;
+}
+.link-btn-inline:active { color: var(--text); }
+
+#kiosk-setup-input {
+  width: 100%; max-width: 360px; padding: 16px; font-size: 20px; text-align: center;
+  border-radius: 14px; border: 1px solid #223255;
+  background: var(--panel); color: var(--text); margin-bottom: 8px;
+}
 
 .center-card {
   max-width: 560px;

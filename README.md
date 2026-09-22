@@ -1,12 +1,15 @@
 # Virtual Front Desk — Video Concierge Prototype
 
 A working prototype that lets a hotel guest walk up to a lobby kiosk/tablet,
-tap a department, and be connected by live video to a remote agent —
-without installing anything or downloading an app.
+tap one button, and be connected by live video to a remote Front Desk agent —
+without installing anything or downloading an app. Built for **multiple
+kiosks** around the property — each one is named once (e.g. "Lobby", "Pool
+Deck") so agents always know where a call is coming from.
 
 Three screens, one server:
 
-- **Kiosk** (`/`) — the guest-facing screen for a lobby tablet.
+- **Kiosk** (`/`) — the guest-facing screen for a lobby tablet. Supports
+  multiple physical kiosks — see "Multiple kiosks" below.
 - **Agent Dashboard** (`/agent`) — where remote staff sign in, watch the
   queue, take calls, and (optionally) handle WhatsApp/Facebook Messenger
   chats from guests.
@@ -22,8 +25,9 @@ beyond this repo.
 
 ## How it works
 
-1. Guest taps a department on the kiosk → browser asks for camera/mic
-   access → guest is added to a server-side queue for that call.
+1. Guest taps "Start Video Call" on the kiosk → browser asks for camera/mic
+   access → guest is added to a server-side queue for that call, tagged
+   with which kiosk they called from.
 2. Every signed-in agent's dashboard gets a live queue update over
    WebSocket and can claim the call ("Answer"). Only one agent can win a
    given call — the server settles ties.
@@ -40,6 +44,32 @@ beyond this repo.
 5. If a guest closes the tab, loses network, or an agent's browser drops
    mid-call, the server detects the disconnect and cleans up the queue /
    notifies the other side, so nothing gets stuck.
+
+## Multiple kiosks
+
+Every call now comes from "Front Desk" (the only department — see
+"What changed" below), so with several kiosks around the property, the
+kiosk's **name** is what tells agents apart, not a department. Each kiosk
+names itself once:
+
+- **First launch**: opening `/` on a kiosk that's never been set up shows a
+  one-time "Set up this kiosk" screen — type a name (e.g. "Lobby", "Pool
+  Deck", "Level 2 Elevator Bank") and save. That name is remembered on that
+  device (`localStorage`) for every call afterwards, across restarts and
+  browser refreshes.
+- **Bookmarked URL** (handy when provisioning several tablets at once):
+  open `/?kiosk=Lobby` (URL-encode spaces, e.g. `/?kiosk=Pool%20Deck`) and
+  that name is saved automatically — no on-screen setup needed. Bookmark a
+  different URL per device.
+- **Renaming a kiosk** (e.g. it's physically moved): tap the small "change"
+  link at the bottom of the kiosk's idle screen to reopen the naming
+  screen.
+
+The kiosk's name travels with every call it starts — agents see it next to
+each waiting call in the queue and in the active-call header (e.g. "Front
+Desk · Pool Deck"), and it's included in the call log and the admin
+dashboard's performance stats (which now show each agent's busiest kiosk
+instead of a department, since there's only one department left).
 
 ```
  ┌─────────────┐   WebSocket (signaling only)   ┌──────────────────┐
@@ -144,6 +174,11 @@ From the dashboard you can:
   own session keeps working without needing to sign in again).
 - **Handle password reset requests** — see the "Password resets" section
   below.
+- **Stay signed in across a page refresh** — both `/agent` and `/admin`
+  remember your session (via the browser's `sessionStorage`) until you
+  click **Sign out** or close the tab. Refreshing the page — or the
+  browser reconnecting after a Render free-tier cold start — no longer
+  drops you back to the sign-in screen.
 - **See performance per agent** — calls handled, total and average talk
   time, most common call topic, and time of their last call. A summary
   line at the top shows how many agents are currently online, how many
@@ -450,8 +485,11 @@ virtual-front-desk/
 
 ## Customizing
 
-- **Departments**: edit the `.dept-btn` buttons in `public/kiosk.html`
-  (each just needs a `data-topic` attribute).
+- **Departments**: the kiosk currently only offers "Front Desk" — to bring
+  back other departments (Concierge, Housekeeping, etc.), add more buttons
+  with a `data-topic` attribute back into `public/kiosk.html`'s idle
+  screen (each needs its own click listener like `btn-start-call`'s in
+  `kiosk.js`).
 - **Branding**: colors are CSS custom properties at the top of
   `kiosk.css` / `agent.css` (`--bg`, `--accent`, etc.); swap the 🛎️ emoji
   for a logo image.

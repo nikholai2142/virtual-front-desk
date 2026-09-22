@@ -1,6 +1,12 @@
 'use strict';
 
 const REFRESH_INTERVAL_MS = 10000;
+// sessionStorage (not localStorage): survives a page refresh, but clears
+// when the tab/window closes — matches "stay signed in for this session"
+// without leaving the password sitting around indefinitely on a shared
+// front-desk computer. This is a plaintext admin password either way,
+// consistent with how it's already handled elsewhere in this demo-grade app.
+const STORAGE_KEY = 'vfd_admin_password';
 
 let adminPassword = null;
 let refreshHandle = null;
@@ -50,23 +56,45 @@ function showLoginError(text) {
   el.classList.remove('hidden');
 }
 
+/**
+ * Tries to sign in with the given password (validated against the server,
+ * same as before). Used both for the login form and to silently restore a
+ * session on page load. Returns true/false so callers can react.
+ */
+async function attemptLogin(password, { silent = false } = {}) {
+  adminPassword = password;
+  try {
+    await api('/api/admin/agents'); // just to validate the password
+    sessionStorage.setItem(STORAGE_KEY, password);
+    setLoginBusy(false);
+    showScreen('screen-dashboard');
+    startDashboard();
+    return true;
+  } catch (err) {
+    adminPassword = null;
+    sessionStorage.removeItem(STORAGE_KEY);
+    if (!silent) {
+      if (err.status === 401) showLoginError('Incorrect password.');
+      else showLoginError('Could not reach the server. Please try again.');
+    } else {
+      setLoginBusy(false);
+    }
+    return false;
+  }
+}
+
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   document.getElementById('login-error').classList.add('hidden');
   const password = document.getElementById('login-password').value;
   if (!password) return;
   setLoginBusy(true);
-  adminPassword = password;
-  try {
-    await api('/api/admin/agents'); // just to validate the password
-    setLoginBusy(false);
-    showScreen('screen-dashboard');
-    startDashboard();
-  } catch (err) {
-    adminPassword = null;
-    if (err.status === 401) showLoginError('Incorrect password.');
-    else showLoginError('Could not reach the server. Please try again.');
-  }
+  await attemptLogin(password);
+});
+
+document.getElementById('btn-sign-out').addEventListener('click', () => {
+  sessionStorage.removeItem(STORAGE_KEY);
+  location.reload();
 });
 
 // ---- Dashboard ----
@@ -93,6 +121,7 @@ async function refreshAll() {
     if (err.status === 401) {
       clearInterval(refreshHandle);
       adminPassword = null;
+      sessionStorage.removeItem(STORAGE_KEY);
       showScreen('screen-login');
       showLoginError('Session ended. Please sign in again.');
     }
@@ -226,7 +255,7 @@ function renderStats(data) {
       <div class="stats-bar-track"><div class="stats-bar-fill" style="width:${pct}%"></div></div>
       <div class="stats-detail">
         avg ${formatDuration(s.avgTalkSeconds)} · total ${formatDuration(s.totalTalkSeconds)}
-        ${s.topTopic ? ` · mostly ${escapeHtml(s.topTopic)}` : ''} · last call ${lastCall}
+        ${s.topKiosk ? ` · mostly ${escapeHtml(s.topKiosk)}` : ''} · last call ${lastCall}
       </div>
     `;
     table.appendChild(row);
@@ -319,6 +348,7 @@ document.getElementById('change-password-form').addEventListener('submit', async
       body: JSON.stringify({ currentPassword, newPassword }),
     });
     adminPassword = newPassword; // keep this session authenticated under the new password
+    sessionStorage.setItem(STORAGE_KEY, newPassword);
     warnIfNotPersisted(result);
     okEl.textContent = 'Password updated.';
     okEl.classList.remove('hidden');
@@ -329,4 +359,12 @@ document.getElementById('change-password-form').addEventListener('submit', async
   }
 });
 
-showScreen('screen-login');
+// ---- Restore a session after a page refresh, if one was saved ----
+
+const storedAdminPassword = sessionStorage.getItem(STORAGE_KEY);
+if (storedAdminPassword) {
+  setLoginBusy(true);
+  attemptLogin(storedAdminPassword, { silent: true });
+} else {
+  showScreen('screen-login');
+}

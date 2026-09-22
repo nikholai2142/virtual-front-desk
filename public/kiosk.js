@@ -24,6 +24,33 @@ const CONNECT_TIMEOUT_MS = 15 * 1000; // if WebRTC never reaches "connected" in 
                                         // blocks direct peer-to-peer), fail loudly instead
                                         // of leaving the guest staring at a blank screen.
 
+// ---- Kiosk identity ----------------------------------------------------
+// With multiple kiosks deployed around the property, agents need to know
+// which physical kiosk a call is coming from. Each kiosk is named once
+// (via this one-time setup screen, or a `?kiosk=Name` URL for a bookmarked
+// per-device URL) and remembers that name in localStorage — not
+// sessionStorage, since a kiosk is a fixed device that should stay named
+// across reboots, not just one browser session.
+const KIOSK_ID_STORAGE_KEY = 'vfd_kiosk_id';
+
+function kioskIdFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const value = params.get('kiosk') || params.get('kioskId');
+  return value ? value.trim().slice(0, 40) : null;
+}
+
+let kioskId = localStorage.getItem(KIOSK_ID_STORAGE_KEY) || kioskIdFromUrl();
+if (kioskId && !localStorage.getItem(KIOSK_ID_STORAGE_KEY)) {
+  localStorage.setItem(KIOSK_ID_STORAGE_KEY, kioskId);
+}
+
+function setKioskId(name) {
+  kioskId = name;
+  localStorage.setItem(KIOSK_ID_STORAGE_KEY, kioskId);
+  const label = document.getElementById('kiosk-id-label');
+  if (label) label.textContent = kioskId;
+}
+
 const screens = {};
 document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
 function showScreen(id) {
@@ -175,7 +202,7 @@ async function requestMediaAndJoin(topic) {
 
   try {
     if (!ws || ws.readyState !== WebSocket.OPEN) await connectWS();
-    wsSend({ type: 'join-queue', topic });
+    wsSend({ type: 'join-queue', topic, kioskId });
   } catch {
     showError('Can’t reach the front desk', 'Please try again in a moment.');
   }
@@ -234,8 +261,21 @@ function resetToIdle() {
 }
 
 // ---- UI wiring ----
-document.querySelectorAll('.dept-btn').forEach((btn) => {
-  btn.addEventListener('click', () => requestMediaAndJoin(btn.dataset.topic));
+document.getElementById('btn-start-call').addEventListener('click', (e) => {
+  requestMediaAndJoin(e.currentTarget.dataset.topic);
+});
+
+document.getElementById('kiosk-setup-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const value = document.getElementById('kiosk-setup-input').value.trim().slice(0, 40);
+  if (!value) return;
+  setKioskId(value);
+  showScreen('screen-idle');
+});
+
+document.getElementById('btn-change-kiosk-id').addEventListener('click', () => {
+  document.getElementById('kiosk-setup-input').value = kioskId || '';
+  showScreen('screen-kiosk-setup');
 });
 
 document.getElementById('btn-cancel-connecting').addEventListener('click', () => {
@@ -270,5 +310,10 @@ document.getElementById('btn-toggle-cam').addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('off', !camOn);
 });
 
-showScreen('screen-idle');
+if (kioskId) {
+  document.getElementById('kiosk-id-label').textContent = kioskId;
+  showScreen('screen-idle');
+} else {
+  showScreen('screen-kiosk-setup');
+}
 connectWS().catch(() => {}); // pre-connect so the queue join is instant

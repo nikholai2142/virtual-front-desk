@@ -29,6 +29,7 @@ let pc = null;
 let localStream = null;
 let currentCallId = null;
 let currentTopic = null;
+let currentKioskId = null;
 let callStartedAt = null;
 let callTimerHandle = null;
 let noteDebounce = null;
@@ -53,10 +54,18 @@ function beep() {
   } catch { /* ignore */ }
 }
 
+// sessionStorage (not localStorage): survives a page refresh, but clears
+// when the tab/window closes — matches "stay signed in for this session"
+// without leaving the password sitting around indefinitely on a shared
+// front-desk computer.
+const STORAGE_KEY = 'vfd_agent_password';
+
 const LOGIN_TIMEOUT_MS = 20000; // Render free-tier cold starts can take ~30-60s;
                                  // this at least turns a silent hang into a visible message.
 let loginInProgress = false;
 let loginTimeoutHandle = null;
+let lastLoginPassword = null;
+let pendingChangePasswordNew = null;
 
 function setLoginBusy(busy) {
   const btn = document.getElementById('login-submit');
@@ -75,6 +84,7 @@ function showLoginError(text) {
 
 function connectWS(password) {
   loginInProgress = true;
+  lastLoginPassword = password;
   setLoginBusy(true);
   document.getElementById('login-error').classList.add('hidden');
 
@@ -129,6 +139,7 @@ function handleServerMessage(msg) {
       loginInProgress = false;
       clearTimeout(loginTimeoutHandle);
       setLoginBusy(false);
+      sessionStorage.setItem(STORAGE_KEY, lastLoginPassword);
       document.getElementById('agent-name-label').textContent = msg.name;
       showScreen('screen-dashboard');
       wsSend({ type: 'get-log' });
@@ -136,6 +147,7 @@ function handleServerMessage(msg) {
       break;
 
     case 'agent-login-fail':
+      sessionStorage.removeItem(STORAGE_KEY);
       showLoginError('Incorrect password. Try again.');
       break;
 
@@ -150,6 +162,7 @@ function handleServerMessage(msg) {
     case 'call-assigned':
       currentCallId = msg.callId;
       currentTopic = msg.topic;
+      currentKioskId = msg.kioskId;
       startAsAnswerer();
       break;
 
@@ -162,10 +175,14 @@ function handleServerMessage(msg) {
       break;
 
     case 'call-ended':
-      if (msg.callId === currentCallId || currentCallId) {
-        endActiveCallUI();
-        wsSend({ type: 'get-log' });
-      }
+      // Always clean up and refresh the log here — this message only ever
+      // arrives for a call this agent was on. (Previously this was gated on
+      // currentCallId still being set, which broke the log refresh
+      // specifically when the agent clicked "End Call" themselves: that
+      // button already clears currentCallId locally for instant UI
+      // feedback, so by the time this echo arrived the check always failed.)
+      endActiveCallUI();
+      wsSend({ type: 'get-log' });
       break;
 
     case 'chat-list':
@@ -199,6 +216,11 @@ function handleServerMessage(msg) {
         ? 'Password updated, but could not reach persistent storage — this change may be lost if the server restarts.'
         : 'Password updated.';
       okEl.classList.remove('hidden');
+      if (pendingChangePasswordNew) {
+        lastLoginPassword = pendingChangePasswordNew;
+        sessionStorage.setItem(STORAGE_KEY, pendingChangePasswordNew);
+        pendingChangePasswordNew = null;
+      }
       setTimeout(() => document.getElementById('change-password-modal').classList.add('hidden'), 1200);
       break;
     }
@@ -308,7 +330,7 @@ function renderQueue(queue) {
     const div = document.createElement('div');
     div.className = 'queue-item';
     div.innerHTML = `
-      <div class="qi-top"><strong>${escapeHtml(item.topic)}</strong></div>
+      <div class="qi-top"><strong>${escapeHtml(item.topic)}</strong><span class="qi-kiosk">${escapeHtml(item.kioskId || '')}</span></div>
       <div class="qi-wait" data-queued-at="${item.queuedAt}">waiting…</div>
       <button data-call-id="${item.callId}">Answer</button>
     `;
@@ -343,13 +365,14 @@ function renderCallLog(entries) {
     const div = document.createElement('div');
     div.className = 'call-log-entry';
     const time = new Date(e.answeredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong> · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}`;
+    const kioskPart = e.kioskId ? ` · ${escapeHtml(e.kioskId)}` : '';
+    div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong>${kioskPart} · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}`;
     box.appendChild(div);
   });
 }
 
 async function startAsAnswerer() {
-  document.getElementById('call-topic-label').textContent = currentTopic;
+  document.getElementById('call-topic-label').textContent = currentKioskId ? `${currentTopic} · ${currentKioskId}` : currentTopic;
   document.getElementById('no-call-placeholder').classList.add('hidden');
   document.getElementById('active-call').classList.remove('hidden');
   document.getElementById('call-notes').value = '';
@@ -417,6 +440,7 @@ function endActiveCallUI() {
   callTimerHandle = null;
   currentCallId = null;
   currentTopic = null;
+  currentKioskId = null;
   micOn = true; camOn = true;
   document.getElementById('active-call').classList.add('hidden');
   document.getElementById('no-call-placeholder').classList.remove('hidden');
@@ -567,5 +591,20 @@ document.getElementById('change-password-form').addEventListener('submit', (e) =
     errEl.classList.remove('hidden');
     return;
   }
+  pendingChangePasswordNew = newPassword;
   wsSend({ type: 'change-password', currentPassword, newPassword });
 });
+
+document.getElementById('btn-sign-out').addEventListener('click', () => {
+  if (currentCallId) wsSend({ type: 'end-call', callId: currentCallId });
+  sessionStorage.removeItem(STORAGE_KEY);
+  try { if (ws) ws.close(); } catch { /* ignore */ }
+  location.reload();
+});
+
+// ---- Restore a session after a page refresh, if one was saved ----
+
+const storedAgentPassword = sessionStorage.getItem(STORAGE_KEY);
+if (storedAgentPassword) {
+  connectWS(storedAgentPassword);
+}

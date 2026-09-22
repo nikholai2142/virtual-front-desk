@@ -354,7 +354,7 @@ function findAgentByName(name) {
 function broadcastQueue() {
   const snapshot = queue.map((callId) => {
     const c = calls.get(callId);
-    return { callId, topic: c.topic, queuedAt: c.queuedAt };
+    return { callId, topic: c.topic, kioskId: c.kioskId, queuedAt: c.queuedAt };
   });
   for (const a of agentConns) {
     a.send({ type: 'queue-update', queue: snapshot });
@@ -383,6 +383,7 @@ function endCall(callId, reason) {
     const entry = {
       callId,
       topic: call.topic,
+      kioskId: call.kioskId,
       agentName: call.agentName || null,
       queuedAt: call.queuedAt,
       answeredAt: call.answeredAt,
@@ -483,22 +484,24 @@ async function handlePasswordResetRequest(req, res) {
 // public-facing login system). Swap for real auth before this matters.
 
 function computeAgentStats() {
-  const byAgent = new Map(); // name -> { calls, totalTalkSeconds, topics: Map, lastCallAt }
+  const byAgent = new Map(); // name -> { calls, totalTalkSeconds, kiosks: Map, lastCallAt }
   for (const entry of callLog) {
     const name = entry.agentName || 'Unknown';
     if (!byAgent.has(name)) {
-      byAgent.set(name, { agentName: name, calls: 0, totalTalkSeconds: 0, topics: new Map(), lastCallAt: 0 });
+      byAgent.set(name, { agentName: name, calls: 0, totalTalkSeconds: 0, kiosks: new Map(), lastCallAt: 0 });
     }
     const stat = byAgent.get(name);
     stat.calls += 1;
     stat.totalTalkSeconds += Math.max(0, Math.round((entry.endedAt - entry.answeredAt) / 1000));
-    stat.topics.set(entry.topic, (stat.topics.get(entry.topic) || 0) + 1);
+    // Kiosk, not topic, is the interesting breakdown now that every call is
+    // the same "Front Desk" topic — this shows which kiosk keeps an agent busiest.
+    if (entry.kioskId) stat.kiosks.set(entry.kioskId, (stat.kiosks.get(entry.kioskId) || 0) + 1);
     stat.lastCallAt = Math.max(stat.lastCallAt, entry.endedAt);
   }
   // Include agents with zero calls too, so a brand-new agent shows up at 0 rather than being absent.
   for (const a of AGENTS) {
     if (!byAgent.has(a.name)) {
-      byAgent.set(a.name, { agentName: a.name, calls: 0, totalTalkSeconds: 0, topics: new Map(), lastCallAt: 0 });
+      byAgent.set(a.name, { agentName: a.name, calls: 0, totalTalkSeconds: 0, kiosks: new Map(), lastCallAt: 0 });
     }
   }
   return [...byAgent.values()]
@@ -507,7 +510,7 @@ function computeAgentStats() {
       calls: s.calls,
       totalTalkSeconds: s.totalTalkSeconds,
       avgTalkSeconds: s.calls ? Math.round(s.totalTalkSeconds / s.calls) : 0,
-      topTopic: [...s.topics.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+      topKiosk: [...s.kiosks.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null,
       lastCallAt: s.lastCallAt || null,
     }))
     .sort((a, b) => b.calls - a.calls);
@@ -761,6 +764,7 @@ function handleGuestConnection(conn) {
       myCallId = callId;
       calls.set(callId, {
         topic: (msg.topic || 'General').slice(0, 60),
+        kioskId: String(msg.kioskId || '').trim().slice(0, 40) || 'Unnamed kiosk',
         guestConn: conn,
         agentConn: null,
         agentName: null,
@@ -863,7 +867,7 @@ function handleAgentConnection(conn) {
       call.agentConn = conn;
       call.agentName = agentName;
       call.answeredAt = Date.now();
-      conn.send({ type: 'call-assigned', callId, topic: call.topic, queuedAt: call.queuedAt });
+      conn.send({ type: 'call-assigned', callId, topic: call.topic, kioskId: call.kioskId, queuedAt: call.queuedAt });
       if (call.guestConn && call.guestConn.alive) {
         call.guestConn.send({ type: 'call-accepted', agentName });
       }

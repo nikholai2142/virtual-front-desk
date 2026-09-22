@@ -3,33 +3,35 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Front Desk — Video Concierge</title>
+<title>Front Desk — Video Call</title>
 <link rel="stylesheet" href="kiosk.css" />
 </head>
 <body>
 
-  <!-- IDLE: department picker -->
-  <section id="screen-idle" class="screen active">
+  <!-- KIOSK SETUP: shown once per device until it's given a name -->
+  <section id="screen-kiosk-setup" class="screen">
+    <form id="kiosk-setup-form" class="center-card">
+      <div class="brand-mark">🛎️</div>
+      <h2>Set up this kiosk</h2>
+      <p class="sub">Give this kiosk a name (e.g. "Lobby" or "Pool Deck") so agents know where each call is coming from.</p>
+      <input id="kiosk-setup-input" type="text" placeholder="Kiosk name" maxlength="40" autocomplete="off" />
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </section>
+
+  <!-- IDLE: start a call -->
+  <section id="screen-idle" class="screen">
     <div class="brand">
       <div class="brand-mark">🛎️</div>
-      <h1>How can we help you today?</h1>
-      <p class="sub">Tap a department to start a video call with our team.</p>
+      <h1>Need help?</h1>
+      <p class="sub">Tap below to start a video call with our Front Desk team.</p>
     </div>
-    <div class="dept-grid">
-      <button class="dept-btn" data-topic="Front Desk">
-        <span class="dept-icon">🧳</span><span>Front Desk</span>
-      </button>
-      <button class="dept-btn" data-topic="Concierge">
-        <span class="dept-icon">🗺️</span><span>Concierge</span>
-      </button>
-      <button class="dept-btn" data-topic="Housekeeping">
-        <span class="dept-icon">🧺</span><span>Housekeeping</span>
-      </button>
-      <button class="dept-btn" data-topic="Maintenance">
-        <span class="dept-icon">🔧</span><span>Maintenance</span>
-      </button>
-    </div>
-    <p class="footnote">Prefer to call? Dial <strong>0</strong> from your room phone.</p>
+    <button id="btn-start-call" class="start-call-btn" data-topic="Front Desk">
+      <span class="dept-icon">🧳</span><span>Start Video Call</span>
+    </button>
+    <p class="footnote">Prefer to call? Dial <strong>0</strong> from your room phone.<br />
+      <span class="kiosk-id-footnote">Kiosk: <span id="kiosk-id-label"></span> · <button type="button" id="btn-change-kiosk-id" class="link-btn-inline">change</button></span>
+    </p>
   </section>
 
   <!-- PERMISSION / CONNECTING -->
