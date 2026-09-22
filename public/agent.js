@@ -192,6 +192,28 @@ function handleServerMessage(msg) {
       errEl.classList.remove('hidden');
       break;
     }
+
+    case 'change-password-ok': {
+      const okEl = document.getElementById('change-password-success');
+      okEl.textContent = (msg.persistenceConfigured && msg.persisted === false)
+        ? 'Password updated, but could not reach persistent storage — this change may be lost if the server restarts.'
+        : 'Password updated.';
+      okEl.classList.remove('hidden');
+      setTimeout(() => document.getElementById('change-password-modal').classList.add('hidden'), 1200);
+      break;
+    }
+
+    case 'change-password-fail': {
+      const errEl = document.getElementById('change-password-error');
+      const messages = {
+        'incorrect-current-password': 'Current password is incorrect.',
+        'too-short': 'New password must be at least 4 characters.',
+        'in-use': 'That password is already in use by another agent.',
+      };
+      errEl.textContent = messages[msg.reason] || 'Could not update password.';
+      errEl.classList.remove('hidden');
+      break;
+    }
   }
 }
 
@@ -466,4 +488,84 @@ document.getElementById('thread-reply-form').addEventListener('submit', (e) => {
   document.getElementById('thread-send-error').classList.add('hidden');
   wsSend({ type: 'send-chat-reply', conversationId: selectedChatId, text });
   textEl.value = '';
+});
+
+// ---- Forgot password (from the login screen, before signing in) ----
+
+document.getElementById('btn-forgot-password').addEventListener('click', () => {
+  document.getElementById('login-form').classList.add('hidden');
+  document.getElementById('forgot-password-form').classList.remove('hidden');
+  document.getElementById('forgot-password-status').classList.add('hidden');
+  document.getElementById('forgot-password-name').value = '';
+});
+
+document.getElementById('btn-back-to-login').addEventListener('click', () => {
+  document.getElementById('forgot-password-form').classList.add('hidden');
+  document.getElementById('login-form').classList.remove('hidden');
+});
+
+document.getElementById('forgot-password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const statusEl = document.getElementById('forgot-password-status');
+  const btn = document.getElementById('forgot-password-submit');
+  const name = document.getElementById('forgot-password-name').value.trim();
+  if (!name) return;
+  btn.disabled = true;
+  try {
+    await fetch('/api/agent/request-password-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    statusEl.textContent = 'Request sent. An admin will set you a new password shortly.';
+    statusEl.classList.remove('hidden');
+    document.getElementById('forgot-password-name').value = '';
+  } catch {
+    statusEl.textContent = 'Could not reach the server. Please try again.';
+    statusEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- Change password (from the dashboard, while signed in) ----
+
+document.getElementById('btn-open-change-password').addEventListener('click', () => {
+  document.getElementById('cp-current').value = '';
+  document.getElementById('cp-new').value = '';
+  document.getElementById('cp-confirm').value = '';
+  document.getElementById('change-password-error').classList.add('hidden');
+  document.getElementById('change-password-success').classList.add('hidden');
+  document.getElementById('change-password-modal').classList.remove('hidden');
+});
+
+document.getElementById('btn-cancel-change-password').addEventListener('click', () => {
+  document.getElementById('change-password-modal').classList.add('hidden');
+});
+
+document.getElementById('change-password-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('change-password-error');
+  const okEl = document.getElementById('change-password-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const currentPassword = document.getElementById('cp-current').value;
+  const newPassword = document.getElementById('cp-new').value;
+  const confirmPassword = document.getElementById('cp-confirm').value;
+  if (!currentPassword || !newPassword) {
+    errEl.textContent = 'Both fields are required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    errEl.textContent = 'New passwords do not match.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (newPassword.length < 4) {
+    errEl.textContent = 'New password must be at least 4 characters.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  wsSend({ type: 'change-password', currentPassword, newPassword });
 });

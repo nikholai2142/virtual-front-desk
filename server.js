@@ -79,15 +79,28 @@ async function saveAgents() {
 // ---- Admin dashboard auth ---------------------------------------------
 // One shared password, same demo-grade approach as the agent passwords —
 // swap for real auth before this handles anything that matters. Set your
-// own via admin.json ({ "password": "..." }) instead of editing this file.
+// own via admin.json ({ "password": "..." }) instead of editing this file,
+// or change it from the dashboard itself (Settings), which updates this the
+// same way the agent list is updated — local file + Redis when configured.
 const ADMIN_FILE = path.join(__dirname, 'admin.json');
-const ADMIN_PASSWORD = (() => {
+let ADMIN_PASSWORD = (() => {
   try {
     return JSON.parse(fs.readFileSync(ADMIN_FILE, 'utf8')).password;
   } catch {
     return 'letmein';
   }
-})();
+})(); // replaced with the real Redis-backed value during startup, see main() below
+
+/** Saves the current admin password. Returns true only if it actually reached persistent storage. */
+async function saveAdminPassword(password) {
+  ADMIN_PASSWORD = password;
+  try {
+    fs.writeFileSync(ADMIN_FILE, JSON.stringify({ password }, null, 2));
+  } catch (err) {
+    console.error('Could not write admin.json locally (non-fatal):', err.message);
+  }
+  return store.persistAdminPassword(password);
+}
 
 const MAX_WAIT_WARN_MS = 60 * 1000; // client shows a "still connecting" notice
 // Only applies when Redis isn't configured — call history is then purely
@@ -324,6 +337,20 @@ const agentConns = new Set();
 const allConns = new Set();
 const callLog = [];
 
+// ---- Agent password-reset requests ------------------------------------
+// An agent who forgot their password can request a reset from the login
+// screen (no auth needed, obviously — that's the whole point). This queues
+// a request for the admin dashboard to show and act on. In-memory only,
+// same as the live call queue above: these are short-lived operational
+// items, not history worth persisting across a restart (see README).
+const passwordResetRequests = [];
+const PASSWORD_RESET_REQUESTS_LIMIT = 200; // safety cap, not a real limit — see LOCAL_ONLY_CALL_LOG_LIMIT above
+
+function findAgentByName(name) {
+  const norm = name.trim().toLowerCase();
+  return AGENTS.find((a) => a.name.trim().toLowerCase() === norm);
+}
+
 function broadcastQueue() {
   const snapshot = queue.map((callId) => {
     const c = calls.get(callId);
@@ -416,6 +443,36 @@ async function recordIncomingChatMessage(platform, contactId, contactName, text,
   convo.unread = true;
   broadcastChatUpdate(convo);
   store.persistChat(convo).catch(() => {});
+}
+
+// ======================================================================
+// Agent self-service — request a password reset (no auth: this is exactly
+// for an agent who's locked out). Intentionally unauthenticated, like the
+// TURN credentials endpoint above; it only ever creates a queued request,
+// never reveals or changes anything by itself.
+// ======================================================================
+
+async function handlePasswordResetRequest(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+  const name = String(body.name || '').trim().slice(0, 60);
+  if (!name) { sendJson(res, 400, { error: 'name is required' }); return; }
+
+  const match = findAgentByName(name);
+  const entry = {
+    id: crypto.randomUUID(),
+    agentId: match ? match.id : null,
+    name: match ? match.name : name, // keeps the on-file name if matched, else whatever they typed
+    requestedAt: Date.now(),
+    status: 'pending',
+  };
+  passwordResetRequests.unshift(entry);
+  if (passwordResetRequests.length > PASSWORD_RESET_REQUESTS_LIMIT) passwordResetRequests.pop();
+
+  console.log(`[password-reset] request received for "${name}"${match ? '' : ' (no matching agent on file)'}`);
+  // Always a generic success response — this endpoint has no auth, so it
+  // shouldn't confirm or deny whether "name" is a real agent.
+  sendJson(res, 200, { ok: true });
 }
 
 // ======================================================================
@@ -609,6 +666,61 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  if (urlObj.pathname === '/api/admin/change-password' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '').trim().slice(0, 60);
+    if (currentPassword !== ADMIN_PASSWORD) { sendJson(res, 401, { error: 'current password is incorrect' }); return; }
+    if (newPassword.length < 4) { sendJson(res, 400, { error: 'new password must be at least 4 characters' }); return; }
+    const persisted = await saveAdminPassword(newPassword);
+    sendJson(res, 200, { ok: true, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/password-reset-requests' && req.method === 'GET') {
+    sendJson(res, 200, { requests: passwordResetRequests.filter((r) => r.status === 'pending') });
+    return;
+  }
+
+  const resolveResetMatch = urlObj.pathname.match(/^\/api\/admin\/password-reset-requests\/([^/]+)\/resolve$/);
+  if (resolveResetMatch && req.method === 'POST') {
+    const id = decodeURIComponent(resolveResetMatch[1]);
+    const entry = passwordResetRequests.find((r) => r.id === id);
+    if (!entry) { sendJson(res, 404, { error: 'no such request' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const newPassword = String(body.newPassword || '').trim().slice(0, 60);
+    if (newPassword.length < 4) { sendJson(res, 400, { error: 'a new password of at least 4 characters is required' }); return; }
+    if (!entry.agentId) {
+      sendJson(res, 400, { error: 'this request has no matching agent on file — add or rename the agent first, or dismiss the request' });
+      return;
+    }
+    const agent = AGENTS.find((a) => a.id === entry.agentId);
+    if (!agent) { sendJson(res, 404, { error: 'that agent no longer exists' }); return; }
+    if (AGENTS.some((a) => a.id !== agent.id && a.password === newPassword)) {
+      sendJson(res, 409, { error: 'that password is already in use by another agent' });
+      return;
+    }
+    agent.password = newPassword;
+    entry.status = 'resolved';
+    entry.resolvedAt = Date.now();
+    const persisted = await saveAgents();
+    sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const dismissResetMatch = urlObj.pathname.match(/^\/api\/admin\/password-reset-requests\/([^/]+)$/);
+  if (dismissResetMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(dismissResetMatch[1]);
+    const entry = passwordResetRequests.find((r) => r.id === id);
+    if (!entry) { sendJson(res, 404, { error: 'no such request' }); return; }
+    entry.status = 'dismissed';
+    entry.resolvedAt = Date.now();
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   if (urlObj.pathname === '/api/admin/stats' && req.method === 'GET') {
     const storageStatus = store.getStatus();
     let note;
@@ -690,6 +802,7 @@ function handleGuestConnection(conn) {
 
 function handleAgentConnection(conn) {
   let agentName = null;
+  let agentId = null;
   allConns.add(conn);
   console.log('[agent] connection handler attached, waiting for messages');
 
@@ -708,6 +821,7 @@ function handleAgentConnection(conn) {
         return;
       }
       agentName = match.name;
+      agentId = match.id;
       agentConns.add(conn);
       conn.send({ type: 'agent-login-ok', name: agentName });
       broadcastQueue();
@@ -715,6 +829,28 @@ function handleAgentConnection(conn) {
     }
 
     if (!agentName) return; // must log in first
+
+    if (msg.type === 'change-password') {
+      const agent = AGENTS.find((a) => a.id === agentId);
+      const currentPassword = String(msg.currentPassword || '');
+      const newPassword = String(msg.newPassword || '').trim().slice(0, 60);
+      if (!agent || agent.password !== currentPassword) {
+        conn.send({ type: 'change-password-fail', reason: 'incorrect-current-password' });
+        return;
+      }
+      if (newPassword.length < 4) {
+        conn.send({ type: 'change-password-fail', reason: 'too-short' });
+        return;
+      }
+      if (AGENTS.some((a) => a.id !== agentId && a.password === newPassword)) {
+        conn.send({ type: 'change-password-fail', reason: 'in-use' });
+        return;
+      }
+      agent.password = newPassword;
+      const persisted = await saveAgents();
+      conn.send({ type: 'change-password-ok', persisted, persistenceConfigured: store.configured });
+      return;
+    }
 
     if (msg.type === 'answer-call') {
       const callId = msg.callId;
@@ -834,6 +970,13 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (urlObj.pathname === '/api/agent/request-password-reset' && req.method === 'POST') {
+    handlePasswordResetRequest(req, res).catch((err) => {
+      console.error('[password-reset] unhandled error:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    });
+    return;
+  }
   if (urlObj.pathname === '/webhooks/whatsapp') {
     if (req.method === 'GET') { handleWebhookVerify(req, res, urlObj); return; }
     if (req.method === 'POST') {
@@ -935,6 +1078,7 @@ async function main() {
     console.log('[agents] upgraded stored agent record(s) from the old PIN scheme to the new id/password scheme.');
     await saveAgents();
   }
+  ADMIN_PASSWORD = await store.loadAdminPassword(ADMIN_PASSWORD);
   callLog.push(...await store.loadCallLog());
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
 

@@ -81,12 +81,14 @@ document.getElementById('btn-refresh').addEventListener('click', refreshAll);
 
 async function refreshAll() {
   try {
-    const [agentsData, statsData] = await Promise.all([
+    const [agentsData, statsData, resetData] = await Promise.all([
       api('/api/admin/agents'),
       api('/api/admin/stats'),
+      api('/api/admin/password-reset-requests'),
     ]);
     renderAgents(agentsData.agents);
     renderStats(statsData);
+    renderResetRequests(resetData.requests);
   } catch (err) {
     if (err.status === 401) {
       clearInterval(refreshHandle);
@@ -123,6 +125,76 @@ function renderAgents(agents) {
         alert('Could not remove agent: ' + err.message);
       }
     });
+    list.appendChild(row);
+  });
+}
+
+function renderResetRequests(requests) {
+  const badge = document.getElementById('reset-requests-badge');
+  if (requests.length > 0) {
+    badge.textContent = requests.length;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+
+  const list = document.getElementById('reset-requests-list');
+  if (!requests.length) {
+    list.innerHTML = '<p class="empty-note">No pending requests.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  requests.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'reset-request-row';
+    const when = new Date(r.requestedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+
+    if (r.agentId) {
+      row.innerHTML = `
+        <div><span class="agent-name">${escapeHtml(r.name)}</span><span class="agent-secret">requested ${when}</span></div>
+        <div class="reset-request-actions">
+          <input type="text" class="reset-new-password" placeholder="New password" maxlength="60" />
+          <button type="button" class="btn-small btn-set">Set</button>
+          <button type="button" class="btn-dismiss">Dismiss</button>
+        </div>
+      `;
+      row.querySelector('.btn-set').addEventListener('click', async () => {
+        const input = row.querySelector('.reset-new-password');
+        const newPassword = input.value.trim();
+        if (!newPassword || newPassword.length < 4) {
+          alert('Enter a new password of at least 4 characters.');
+          return;
+        }
+        try {
+          const result = await api(`/api/admin/password-reset-requests/${encodeURIComponent(r.id)}/resolve`, {
+            method: 'POST',
+            body: JSON.stringify({ newPassword }),
+          });
+          warnIfNotPersisted(result);
+          refreshAll();
+        } catch (err) {
+          alert('Could not set the new password: ' + err.message);
+        }
+      });
+    } else {
+      row.innerHTML = `
+        <div><span class="agent-name">${escapeHtml(r.name)}</span><span class="agent-secret">requested ${when} · no matching agent on file</span></div>
+        <div class="reset-request-actions">
+          <button type="button" class="btn-dismiss">Dismiss</button>
+        </div>
+      `;
+    }
+
+    row.querySelector('.btn-dismiss').addEventListener('click', async () => {
+      if (!confirm(`Dismiss the password reset request from "${r.name}"?`)) return;
+      try {
+        await api(`/api/admin/password-reset-requests/${encodeURIComponent(r.id)}`, { method: 'DELETE' });
+        refreshAll();
+      } catch (err) {
+        alert('Could not dismiss the request: ' + err.message);
+      }
+    });
+
     list.appendChild(row);
   });
 }
@@ -201,5 +273,60 @@ function warnIfNotPersisted(result) {
     alert('Saved for now, but could not reach persistent storage — this change may be lost if the server restarts. Check the Upstash database and try again shortly.');
   }
 }
+
+// ---- Change admin password ----
+
+document.getElementById('btn-open-change-password').addEventListener('click', () => {
+  document.getElementById('cp-current').value = '';
+  document.getElementById('cp-new').value = '';
+  document.getElementById('cp-confirm').value = '';
+  document.getElementById('change-password-error').classList.add('hidden');
+  document.getElementById('change-password-success').classList.add('hidden');
+  document.getElementById('change-password-modal').classList.remove('hidden');
+});
+
+document.getElementById('btn-cancel-change-password').addEventListener('click', () => {
+  document.getElementById('change-password-modal').classList.add('hidden');
+});
+
+document.getElementById('change-password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('change-password-error');
+  const okEl = document.getElementById('change-password-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const currentPassword = document.getElementById('cp-current').value;
+  const newPassword = document.getElementById('cp-new').value;
+  const confirmPassword = document.getElementById('cp-confirm').value;
+  if (!currentPassword || !newPassword) {
+    errEl.textContent = 'Both fields are required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    errEl.textContent = 'New passwords do not match.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (newPassword.length < 4) {
+    errEl.textContent = 'New password must be at least 4 characters.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    const result = await api('/api/admin/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    adminPassword = newPassword; // keep this session authenticated under the new password
+    warnIfNotPersisted(result);
+    okEl.textContent = 'Password updated.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => document.getElementById('change-password-modal').classList.add('hidden'), 1000);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
 
 showScreen('screen-login');

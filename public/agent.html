@@ -16,6 +16,16 @@
       <input id="login-password" type="password" autocomplete="current-password" placeholder="Password" maxlength="60" />
       <button id="login-submit" type="submit" class="btn btn-primary">Sign In</button>
       <p id="login-error" class="error hidden"></p>
+      <button type="button" id="btn-forgot-password" class="link-btn">Forgot your password?</button>
+    </form>
+
+    <form id="forgot-password-form" class="login-card hidden">
+      <h1>Request a reset</h1>
+      <p class="sub">Enter your name and an admin will set you a new password.</p>
+      <input id="forgot-password-name" type="text" autocomplete="name" placeholder="Your name" maxlength="60" />
+      <button id="forgot-password-submit" type="submit" class="btn btn-primary">Send request</button>
+      <p id="forgot-password-status" class="hint hidden"></p>
+      <button type="button" id="btn-back-to-login" class="link-btn">Back to sign in</button>
     </form>
   </section>
 
@@ -32,6 +42,7 @@
         </div>
       </div>
       <div class="topbar-right">
+        <button id="btn-open-change-password" class="icon-btn" type="button" title="Change password">⚙</button>
         <span id="agent-status-dot" class="status-dot"></span>
         <span id="agent-name-label">—</span>
       </div>
@@ -106,6 +117,32 @@
       </section>
     </main>
   </section>
+
+  <!-- CHANGE PASSWORD -->
+  <div id="change-password-modal" class="modal-overlay hidden">
+    <form id="change-password-form" class="modal-card">
+      <h2>Change your password</h2>
+      <p class="sub">Update the password you sign in with.</p>
+      <div class="modal-field">
+        <label for="cp-current">Current password</label>
+        <input id="cp-current" type="password" autocomplete="current-password" maxlength="60" />
+      </div>
+      <div class="modal-field">
+        <label for="cp-new">New password</label>
+        <input id="cp-new" type="password" autocomplete="new-password" maxlength="60" />
+      </div>
+      <div class="modal-field">
+        <label for="cp-confirm">Confirm new password</label>
+        <input id="cp-confirm" type="password" autocomplete="new-password" maxlength="60" />
+      </div>
+      <p id="change-password-error" class="error hidden"></p>
+      <p id="change-password-success" class="hint hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-change-password" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
 
   <script src="agent.js"></script>
 </body>

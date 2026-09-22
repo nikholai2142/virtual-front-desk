@@ -26,6 +26,7 @@ const REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const configured = Boolean(REST_URL && REST_TOKEN);
 
 const AGENTS_KEY = 'vfd:agents';
+const ADMIN_PASSWORD_KEY = 'vfd:admin:password';
 const CALL_LOG_KEY = 'vfd:calllog';
 // A safety net, not a real limit — this is roughly 135 years of calls at
 // one a day. It exists only so a bug or abuse can't grow the list forever.
@@ -105,6 +106,46 @@ async function persistAgents(agents) {
   } catch (err) {
     connected = false;
     console.error('[store] could not save the agent list to Redis — this change may be lost on the next restart/redeploy:', err.message);
+    return false;
+  }
+}
+
+// ---- Admin password --------------------------------------------------------
+// Same idea as the agent list: Redis is the durable copy when configured, a
+// local admin.json is the seed/fallback otherwise. Stored as a plain string
+// (not JSON) since that's all it is.
+
+/**
+ * Loads the admin password from Redis. On a brand-new Redis database there's
+ * nothing there yet, so it seeds Redis from `fallbackPassword` (the local
+ * admin.json / default) and returns that. If Redis isn't configured or isn't
+ * reachable, just returns `fallbackPassword` unchanged.
+ */
+async function loadAdminPassword(fallbackPassword) {
+  if (!configured) return fallbackPassword;
+  try {
+    const raw = await redisCommand(['GET', ADMIN_PASSWORD_KEY]);
+    connected = true;
+    if (raw) return raw;
+    await redisCommand(['SET', ADMIN_PASSWORD_KEY, fallbackPassword]);
+    return fallbackPassword;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load the admin password from Redis, using the local fallback instead:', err.message);
+    return fallbackPassword;
+  }
+}
+
+/** Returns true if the new admin password was actually saved to Redis, false otherwise (including "not configured"). */
+async function persistAdminPassword(password) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', ADMIN_PASSWORD_KEY, password]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save the admin password to Redis — this change may be lost on the next restart/redeploy:', err.message);
     return false;
   }
 }
@@ -201,6 +242,8 @@ module.exports = {
   getStatus,
   loadAgents,
   persistAgents,
+  loadAdminPassword,
+  persistAdminPassword,
   loadCallLog,
   appendCallLogEntry,
   loadChats,

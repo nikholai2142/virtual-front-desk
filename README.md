@@ -139,12 +139,43 @@ From the dashboard you can:
   needed).
 - **Remove an agent** — click "Remove" on any agent's row (asks for
   confirmation first).
+- **Change the admin password** — click the ⚙ button next to "Refresh",
+  enter the current password and a new one. Takes effect immediately (your
+  own session keeps working without needing to sign in again).
+- **Handle password reset requests** — see the "Password resets" section
+  below.
 - **See performance per agent** — calls handled, total and average talk
   time, most common call topic, and time of their last call. A summary
   line at the top shows how many agents are currently online, how many
   guests are waiting, and how many calls are active right now. The
   dashboard refreshes itself every 10 seconds, or click "Refresh" for an
   immediate update.
+
+### Password resets
+
+Agents can change their own password any time from the ⚙ button in the
+`/agent` dashboard's top bar (current password + new password).
+
+If an agent forgets their password, they click **"Forgot your password?"**
+on the `/agent` sign-in screen and enter their name. That queues a request
+that shows up in the admin dashboard's **"Password reset requests"** panel
+— usually within 10 seconds, and it's badged in red so it's hard to miss.
+From there you can either:
+
+- Type a new password into the request's row and click **Set** — this
+  updates that agent's password immediately (tell them the new password
+  through whatever channel you trust), or
+- Click **Dismiss** to clear the request without changing anything (e.g.
+  it was a mistake, or you handled it another way).
+
+If the name they typed doesn't match any agent on file (a typo, or an
+agent that's since been removed), the request still shows up so you know
+someone's locked out, but there's no "Set" option — only "Dismiss" — until
+you add or rename the matching agent.
+
+Password reset requests are **in-memory only** (like the live call queue),
+not persisted to Redis — they're meant to be handled promptly, not kept as
+history, so a restart clears any that are still pending.
 
 **Whether any of this survives a restart or a redeploy depends on whether
 you've set up persistent storage** — see the next section. Without it,
@@ -170,11 +201,13 @@ below). That's fine for trying things out, but not for actually relying on
 it: a restart, a spin-down (free Render instances sleep after inactivity),
 or your next deploy wipes it clean.
 
-To make agents and call history **permanent — surviving restarts and
-redeploys, with true all-time history** — connect a free
-[Upstash](https://upstash.com) Redis database. It's a small cloud database
-reached over plain HTTPS, so no extra npm packages are needed, and it has
-a generous free tier that easily covers a single hotel's traffic.
+To make agents, the admin password, and call history **permanent —
+surviving restarts and redeploys, with true all-time history** — connect a
+free [Upstash](https://upstash.com) Redis database. It's a small cloud
+database reached over plain HTTPS, so no extra npm packages are needed, and
+it has a generous free tier that easily covers a single hotel's traffic.
+(Password reset *requests* are the one exception — see "Password resets"
+above — those stay in-memory even with Redis configured, by design.)
 
 **1. Create a free Upstash account and database**
 
@@ -368,10 +401,14 @@ in a real lobby:
   any guest on a network that blocks direct peer-to-peer connections
   (common on hotel guest wifi) will get a silent hang instead of a call.
 - **Replace the agent login and the admin password.** `agents.json` and
-  `admin.json` are flat files for the demo. Swap `handleAgentConnection`'s
-  password check and the admin API's password check in `server.js` for
-  real auth (SSO, your PMS's staff directory, per-shift codes, etc.)
-  before this is used with real guests or handed to real managers.
+  `admin.json` are flat files for the demo, and everyone (agents, the
+  admin) can now change their own password from the dashboard, plus
+  request a reset if they forget it — but it's still one shared password
+  per role with no per-person accounts or audit trail. Swap
+  `handleAgentConnection`'s password check and the admin API's password
+  check in `server.js` for real auth (SSO, your PMS's staff directory,
+  per-shift codes, etc.) before this is used with real guests or handed to
+  real managers.
 - **The live queue and active calls are in-memory, always.** Who's
   waiting and who's on a call right now lives in the Node process's
   memory regardless of the Redis setup above, so it can't run as multiple
