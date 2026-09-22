@@ -110,13 +110,13 @@ function renderAgents(agents) {
     const row = document.createElement('div');
     row.className = 'agent-row';
     row.innerHTML = `
-      <div><span class="agent-name">${escapeHtml(a.name)}</span><span class="agent-pin">PIN ${escapeHtml(a.pin)}</span></div>
-      <button data-pin="${escapeHtml(a.pin)}">Remove</button>
+      <div><span class="agent-name">${escapeHtml(a.name)}</span><span class="agent-secret">Password ${escapeHtml(a.password)}</span></div>
+      <button data-id="${escapeHtml(a.id)}">Remove</button>
     `;
     row.querySelector('button').addEventListener('click', async () => {
       if (!confirm(`Remove agent "${a.name}"?`)) return;
       try {
-        const result = await api(`/api/admin/agents/${encodeURIComponent(a.pin)}`, { method: 'DELETE' });
+        const result = await api(`/api/admin/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' });
         warnIfNotPersisted(result);
         refreshAll();
       } catch (err) {
@@ -175,16 +175,16 @@ document.getElementById('add-agent-form').addEventListener('submit', async (e) =
   const errEl = document.getElementById('add-agent-error');
   errEl.classList.add('hidden');
   const name = document.getElementById('new-agent-name').value.trim();
-  const pin = document.getElementById('new-agent-pin').value.trim();
-  if (!name || !pin) {
-    errEl.textContent = 'Both name and PIN are required.';
+  const password = document.getElementById('new-agent-password').value.trim();
+  if (!name || !password) {
+    errEl.textContent = 'Both name and password are required.';
     errEl.classList.remove('hidden');
     return;
   }
   try {
-    const result = await api('/api/admin/agents', { method: 'POST', body: JSON.stringify({ name, pin }) });
+    const result = await api('/api/admin/agents', { method: 'POST', body: JSON.stringify({ name, password }) });
     document.getElementById('new-agent-name').value = '';
-    document.getElementById('new-agent-pin').value = '';
+    document.getElementById('new-agent-password').value = '';
     warnIfNotPersisted(result);
     refreshAll();
   } catch (err) {

@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./store');
 const chat = require('./chat');
+const turn = require('./turn');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -33,12 +34,35 @@ function readLocalAgentsFile() {
     return JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf8'));
   } catch {
     return [
-      { pin: '1234', name: 'Alex' },
-      { pin: '5678', name: 'Sam' },
+      { id: crypto.randomUUID(), name: 'Alex', password: 'alex1234' },
+      { id: crypto.randomUUID(), name: 'Sam', password: 'sam5678' },
     ];
   }
 }
 let AGENTS = readLocalAgentsFile(); // replaced with the real Redis-backed list during startup, see main() below
+
+/**
+ * Backward-compatible migration for agent records saved before this app
+ * switched from numeric-only PINs to alphanumeric passwords. Older records
+ * (local agents.json from a previous deploy, or an older list already sitting
+ * in Redis) look like { pin, name } with no `id`. This upgrades them in
+ * place to { id, name, password } without discarding anyone's existing
+ * credential, so a deploy of this change doesn't lock any agent out.
+ */
+function migrateAgentRecords(agents) {
+  let changed = false;
+  const migrated = agents.map((a) => {
+    const next = { ...a };
+    if (!next.id) { next.id = crypto.randomUUID(); changed = true; }
+    if (next.password === undefined && next.pin !== undefined) {
+      next.password = next.pin;
+      changed = true;
+    }
+    if ('pin' in next) { delete next.pin; changed = true; }
+    return next;
+  });
+  return { agents: migrated, changed };
+}
 
 /** Saves the current AGENTS array. Returns true only if it actually reached persistent storage. */
 async function saveAgents() {
@@ -53,9 +77,9 @@ async function saveAgents() {
 }
 
 // ---- Admin dashboard auth ---------------------------------------------
-// One shared password, same demo-grade approach as the agent PINs — swap
-// for real auth before this handles anything that matters. Set your own
-// via admin.json ({ "password": "..." }) instead of editing this file.
+// One shared password, same demo-grade approach as the agent passwords —
+// swap for real auth before this handles anything that matters. Set your
+// own via admin.json ({ "password": "..." }) instead of editing this file.
 const ADMIN_FILE = path.join(__dirname, 'admin.json');
 const ADMIN_PASSWORD = (() => {
   try {
@@ -469,6 +493,29 @@ function readRawBody(req) {
 }
 
 // ======================================================================
+// TURN credentials — kiosk.js and agent.js fetch this right before
+// starting a call instead of using a hardcoded ICE_SERVERS array, since
+// Cloudflare's TURN service issues short-lived, per-request credentials
+// rather than one static secret. No auth on this endpoint: it's called by
+// unauthenticated guests too, and the credentials it hands out are
+// intentionally short-lived and scoped for exactly this — safe to give to
+// any client. See turn.js.
+// ======================================================================
+
+async function handleTurnCredentials(req, res) {
+  if (turn.configured) {
+    try {
+      const iceServers = await turn.generateIceServers();
+      sendJson(res, 200, { iceServers, turnConfigured: true });
+      return;
+    } catch (err) {
+      console.error('[turn] could not generate Cloudflare TURN credentials, falling back to STUN-only:', err.message);
+    }
+  }
+  sendJson(res, 200, { iceServers: turn.STUN_ONLY_FALLBACK, turnConfigured: false });
+}
+
+// ======================================================================
 // Webhooks — Meta calls these when a guest sends a WhatsApp or Messenger
 // message. See chat.js for the API calls and payload parsing; this just
 // wires HTTP routing + the one-time verification handshake.
@@ -541,10 +588,11 @@ async function handleAdminApi(req, res, urlObj) {
     let body;
     try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
     const name = String(body.name || '').trim().slice(0, 60);
-    const pin = String(body.pin || '').trim().slice(0, 12);
-    if (!name || !pin) { sendJson(res, 400, { error: 'name and pin are both required' }); return; }
-    if (AGENTS.some((a) => a.pin === pin)) { sendJson(res, 409, { error: 'that PIN is already in use' }); return; }
-    AGENTS.push({ name, pin });
+    const password = String(body.password || '').trim().slice(0, 60);
+    if (!name || !password) { sendJson(res, 400, { error: 'name and password are both required' }); return; }
+    if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
+    if (AGENTS.some((a) => a.password === password)) { sendJson(res, 409, { error: 'that password is already in use' }); return; }
+    AGENTS.push({ id: crypto.randomUUID(), name, password });
     const persisted = await saveAgents();
     sendJson(res, 201, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
     return;
@@ -552,10 +600,10 @@ async function handleAdminApi(req, res, urlObj) {
 
   const deleteMatch = urlObj.pathname.match(/^\/api\/admin\/agents\/([^/]+)$/);
   if (deleteMatch && req.method === 'DELETE') {
-    const pin = decodeURIComponent(deleteMatch[1]);
+    const id = decodeURIComponent(deleteMatch[1]);
     const before = AGENTS.length;
-    AGENTS = AGENTS.filter((a) => a.pin !== pin);
-    if (AGENTS.length === before) { sendJson(res, 404, { error: 'no agent with that PIN' }); return; }
+    AGENTS = AGENTS.filter((a) => a.id !== id);
+    if (AGENTS.length === before) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
     const persisted = await saveAgents();
     sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
     return;
@@ -654,7 +702,7 @@ function handleAgentConnection(conn) {
     console.log('[agent] received message type:', msg.type);
 
     if (msg.type === 'agent-login') {
-      const match = AGENTS.find((a) => a.pin === String(msg.pin || ''));
+      const match = AGENTS.find((a) => a.password === String(msg.password || ''));
       if (!match) {
         conn.send({ type: 'agent-login-fail' });
         return;
@@ -779,6 +827,13 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (urlObj.pathname === '/api/turn-credentials' && req.method === 'GET') {
+    handleTurnCredentials(req, res).catch((err) => {
+      console.error('[turn] unhandled error:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    });
+    return;
+  }
   if (urlObj.pathname === '/webhooks/whatsapp') {
     if (req.method === 'GET') { handleWebhookVerify(req, res, urlObj); return; }
     if (req.method === 'POST') {
@@ -874,8 +929,20 @@ async function main() {
   }
 
   AGENTS = await store.loadAgents(AGENTS);
+  const { agents: migratedAgents, changed: agentsMigrated } = migrateAgentRecords(AGENTS);
+  AGENTS = migratedAgents;
+  if (agentsMigrated) {
+    console.log('[agents] upgraded stored agent record(s) from the old PIN scheme to the new id/password scheme.');
+    await saveAgents();
+  }
   callLog.push(...await store.loadCallLog());
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
+
+  if (turn.configured) {
+    console.log('[turn] Cloudflare TURN configured — calls will use it to connect across networks that block direct peer-to-peer.');
+  } else {
+    console.log('[turn] CLOUDFLARE_TURN_KEY_ID / CLOUDFLARE_TURN_API_TOKEN not set — calls fall back to STUN-only, which cannot relay across networks that block direct connections (see README\'s "Video call relay" section).');
+  }
 
   if (chat.whatsappConfigured || chat.messengerConfigured) {
     if (!chat.webhooksConfigured) {

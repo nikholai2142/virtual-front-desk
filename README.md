@@ -66,25 +66,75 @@ node server.js
 
 No build step, no install step. Requires Node 18+.
 
-Demo agent PINs (edit `agents.json` to change, or add more agents):
+Demo agent passwords (edit `agents.json` to change, or add more agents):
 
-| PIN  | Name |
-|------|------|
-| 1234 | Alex |
-| 5678 | Sam  |
+| Password | Name |
+|----------|------|
+| alex1234 | Alex |
+| sam5678  | Sam  |
 
 Open `/agent` in one browser tab/device and `/` in another to try the
 whole flow yourself.
+
+## Video call relay (TURN)
+
+WebRTC tries a direct connection between the two browsers first. On a lot
+of real-world networks that fails silently — hotel guest wifi and many
+home/office routers block direct peer-to-peer connections outright (a
+feature usually called "client isolation") — and without a fallback, the
+call just hangs with no video and no error. A **TURN server** is that
+fallback: it relays the call's video/audio when a direct connection isn't
+possible.
+
+This project uses **Cloudflare's TURN service** (part of
+[Cloudflare Realtime](https://developers.cloudflare.com/realtime/turn/)),
+called from a small server endpoint (`/api/turn-credentials`) that
+`kiosk.js` and `agent.js` fetch right before starting a call — Cloudflare's
+own guidance is that TURN credentials shouldn't be hardcoded into
+client-side code the way a lot of other TURN providers' are, since they're
+meant to be short-lived and minted per use, so the server does that
+minting on request. Its free tier is generous: **1,000 GB/month** of
+relay traffic before any cost, then $0.05/GB — likely enough that a single
+hotel never gets billed for this at all.
+
+**Without it set up, calls fall back to STUN-only** — direct peer-to-peer
+connections still work (e.g. two devices on an open network), but any
+call that would need a relay just fails to connect, the same silent-hang
+problem described above. Set this up before relying on this for real
+guest traffic.
+
+### Setup
+
+1. Go to the [Cloudflare dashboard](https://dash.cloudflare.com) → sign up
+   free if you don't have an account → **Realtime** (may be listed as
+   **Calls**) → **TURN**.
+2. Click **Create TURN App** (or **Create Key**). This gives you a
+   **Turn Key ID** and an **API Token** — copy both.
+3. In Render, your service → **Environment**, add:
+
+   | Variable | Value |
+   |---|---|
+   | `CLOUDFLARE_TURN_KEY_ID` | the Turn Key ID from step 2 |
+   | `CLOUDFLARE_TURN_API_TOKEN` | the API Token from step 2 |
+
+4. Save, let Render redeploy, and upload `server.js` and `turn.js` (new
+   file) to GitHub if you haven't already.
+5. Open `/agent`, sign in, and check the Render logs for `[turn]
+   Cloudflare TURN configured` at startup to confirm it's active.
+
+No code changes needed beyond what's already in this update — the two
+env vars are the only thing that turns it on.
 
 ## Admin dashboard
 
 Open `/admin` and sign in with the admin password (default `letmein`,
 stored in `admin.json` — **change it before real use**, the same way you'd
-change the demo agent PINs).
+change the demo agent passwords).
 
 From the dashboard you can:
 
-- **Add an agent** — enter a name and a PIN; it's added to the agent list
+- **Add an agent** — enter a name and a password (at least 4 characters,
+  letters/numbers/symbols all fine); it's added to the agent list
   immediately (agents can sign in at `/agent` right away, no restart
   needed).
 - **Remove an agent** — click "Remove" on any agent's row (asks for
@@ -107,7 +157,7 @@ the dashboard itself always tells you which mode you're in.
 The admin API itself (`/api/admin/agents`, `/api/admin/stats`) is
 protected by a single shared password sent as an `X-Admin-Password`
 header — there's no per-admin login or audit trail, matching the same
-demo-grade auth used for agent PINs. Treat it the same way: fine for a
+demo-grade auth used for agent passwords. Treat it the same way: fine for a
 small team getting started, swap for real auth (SSO, a proper user table)
 before this is relied on operationally.
 
@@ -312,21 +362,16 @@ in a real lobby:
   (`getUserMedia`) on `https://` or `localhost`. Put this behind a reverse
   proxy (Caddy, nginx, or a platform like Render/Fly.io) with a real
   certificate before it touches a guest-facing tablet.
-- **The TURN server currently configured is a free testing relay.** Both
-  `kiosk.js` and `agent.js` are set up with a free Metered.ca TURN account
-  (`global.relay.metered.ca`) so calls can connect even when devices are on
-  a network that blocks direct peer-to-peer connections — this is common on
-  hotel guest wifi and behind many home/office routers (a router feature
-  called "client isolation"), and without a TURN relay affected calls just
-  hang with no video and no error. The free tier has limited bandwidth and
-  isn't meant for real guest traffic — before going live, sign up for your
-  own TURN credentials (Metered's own paid plan, or Twilio, Cloudflare
-  Calls, Xirsys) and swap them into the `ICE_SERVERS` array in both files.
-- **Replace the PIN login and the admin password.** `agents.json` and
+- **TURN needs to be set up before going live.** See "Video call relay
+  (TURN)" above — without `CLOUDFLARE_TURN_KEY_ID` /
+  `CLOUDFLARE_TURN_API_TOKEN` configured, calls fall back to STUN-only and
+  any guest on a network that blocks direct peer-to-peer connections
+  (common on hotel guest wifi) will get a silent hang instead of a call.
+- **Replace the agent login and the admin password.** `agents.json` and
   `admin.json` are flat files for the demo. Swap `handleAgentConnection`'s
-  PIN check and the admin API's password check in `server.js` for real
-  auth (SSO, your PMS's staff directory, per-shift codes, etc.) before
-  this is used with real guests or handed to real managers.
+  password check and the admin API's password check in `server.js` for
+  real auth (SSO, your PMS's staff directory, per-shift codes, etc.)
+  before this is used with real guests or handed to real managers.
 - **The live queue and active calls are in-memory, always.** Who's
   waiting and who's on a call right now lives in the Node process's
   memory regardless of the Redis setup above, so it can't run as multiple
@@ -356,7 +401,8 @@ virtual-front-desk/
 ├── server.js       Signaling server: WS relay, queue, agent auth, admin API, webhooks, static hosting
 ├── store.js        Persistence layer: Upstash Redis if configured, else local-only fallback
 ├── chat.js         WhatsApp/Messenger: Graph API sending, webhook signature check + parsing
-├── agents.json     Seed/fallback agent PINs/names — real source of truth is Redis once configured
+├── turn.js         Cloudflare TURN: mints short-lived WebRTC relay credentials per call
+├── agents.json     Seed/fallback agent passwords/names — real source of truth is Redis once configured
 ├── admin.json      Admin dashboard password (default "letmein" — change this)
 ├── package.json
 └── public/

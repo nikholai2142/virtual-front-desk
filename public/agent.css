@@ -26,9 +26,9 @@ html, body {
 }
 .login-card h1 { margin: 0 0 4px; font-size: 24px; }
 .sub { color: var(--sub); font-size: 14px; margin: 0 0 20px; }
-#login-pin {
-  width: 100%; padding: 14px; font-size: 20px; text-align: center;
-  letter-spacing: 4px; border-radius: 10px; border: 1px solid var(--border);
+#login-password {
+  width: 100%; padding: 14px; font-size: 16px; text-align: left;
+  border-radius: 10px; border: 1px solid var(--border);
   background: #0e1526; color: var(--text); margin-bottom: 16px;
 }
 .btn { border: none; border-radius: 10px; padding: 12px 20px; font-size: 15px; cursor: pointer; width: 100%; }

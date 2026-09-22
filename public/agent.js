@@ -1,14 +1,21 @@
 'use strict';
 
-const ICE_SERVERS = [
-  { urls: 'stun:stun.relay.metered.ca:80' },
-  { urls: 'turn:global.relay.metered.ca:80', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  { urls: 'turn:global.relay.metered.ca:443', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  // Free Metered.ca relay — see kiosk.js for the same note. Keep both files
-  // in sync if you swap this for your own TURN credentials.
-];
+// See kiosk.js for the same note: ICE servers now come from the server's
+// /api/turn-credentials endpoint (Cloudflare TURN, minted per call) rather
+// than a hardcoded array here. This is only the last-resort fallback if
+// that request itself fails.
+const FALLBACK_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+async function getIceServers() {
+  try {
+    const res = await fetch('/api/turn-credentials');
+    const data = await res.json();
+    if (Array.isArray(data.iceServers) && data.iceServers.length) return data.iceServers;
+  } catch (err) {
+    console.warn('Could not fetch TURN credentials, falling back to STUN-only:', err);
+  }
+  return FALLBACK_ICE_SERVERS;
+}
 
 const screens = {};
 document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
@@ -66,7 +73,7 @@ function showLoginError(text) {
   el.classList.remove('hidden');
 }
 
-function connectWS(pin) {
+function connectWS(password) {
   loginInProgress = true;
   setLoginBusy(true);
   document.getElementById('login-error').classList.add('hidden');
@@ -90,7 +97,7 @@ function connectWS(pin) {
   }, LOGIN_TIMEOUT_MS);
 
   socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'agent-login', pin }));
+    socket.send(JSON.stringify({ type: 'agent-login', password }));
   });
 
   socket.addEventListener('message', (evt) => {
@@ -129,7 +136,7 @@ function handleServerMessage(msg) {
       break;
 
     case 'agent-login-fail':
-      showLoginError('Incorrect PIN. Try again.');
+      showLoginError('Incorrect password. Try again.');
       break;
 
     case 'queue-update':
@@ -335,7 +342,8 @@ async function startAsAnswerer() {
     return;
   }
 
-  pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const iceServers = await getIceServers();
+  pc = new RTCPeerConnection({ iceServers });
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
   pc.ontrack = (evt) => {
@@ -406,9 +414,9 @@ function escapeHtml(s) {
 document.getElementById('login-form').addEventListener('submit', (e) => {
   e.preventDefault();
   document.getElementById('login-error').classList.add('hidden');
-  const pin = document.getElementById('login-pin').value.trim();
-  if (!pin) return;
-  connectWS(pin);
+  const password = document.getElementById('login-password').value.trim();
+  if (!password) return;
+  connectWS(password);
 });
 
 document.getElementById('btn-end-call').addEventListener('click', () => {

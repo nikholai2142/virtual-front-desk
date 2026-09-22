@@ -1,15 +1,21 @@
 'use strict';
 
-const ICE_SERVERS = [
-  { urls: 'stun:stun.relay.metered.ca:80' },
-  { urls: 'turn:global.relay.metered.ca:80', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  { urls: 'turn:global.relay.metered.ca:443', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'da47e3c0b739dcc6811b5e90', credential: 'WiGlWEcEbBjSmsfg' },
-  // Free Metered.ca relay — fine for testing/small-scale use. Swap for your
-  // own TURN credentials (or a paid Metered plan) before relying on this
-  // for real guest traffic; free-tier bandwidth is limited.
-];
+// Used only if the server can't be reached at all for /api/turn-credentials
+// (a network hiccup) — the server is the real source of ICE servers now,
+// since Cloudflare's TURN credentials are short-lived and minted per call
+// rather than hardcoded here. See turn.js / server.js.
+const FALLBACK_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+async function getIceServers() {
+  try {
+    const res = await fetch('/api/turn-credentials');
+    const data = await res.json();
+    if (Array.isArray(data.iceServers) && data.iceServers.length) return data.iceServers;
+  } catch (err) {
+    console.warn('Could not fetch TURN credentials, falling back to STUN-only:', err);
+  }
+  return FALLBACK_ICE_SERVERS;
+}
 
 const WAIT_WARNING_MS = 60 * 1000;
 const IDLE_RESET_MS = 4000;
@@ -110,7 +116,8 @@ async function handleSignal(signalType, data) {
 }
 
 async function startPeerConnection() {
-  pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const iceServers = await getIceServers();
+  pc = new RTCPeerConnection({ iceServers });
 
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 

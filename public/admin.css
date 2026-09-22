@@ -75,7 +75,7 @@ html, body {
   border-radius: 10px; padding: 10px 14px;
 }
 .agent-row .agent-name { font-weight: 600; }
-.agent-row .agent-pin { color: var(--sub); font-size: 13px; margin-left: 10px; }
+.agent-row .agent-secret { color: var(--sub); font-size: 13px; margin-left: 10px; }
 .agent-row button {
   background: transparent; color: var(--danger); border: 1px solid var(--border);
   border-radius: 8px; padding: 5px 12px; font-size: 12px; cursor: pointer;
