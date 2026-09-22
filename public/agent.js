@@ -413,6 +413,11 @@ async function startAsAnswerer() {
     if (pc && pc.connectionState !== 'connected') failConnection();
   }, CONNECT_TIMEOUT_MS);
 
+  // pc and its handlers are ready now — process anything (the offer, and
+  // any ICE candidates behind it) that arrived while we were still
+  // awaiting getUserMedia()/getIceServers() above.
+  await flushPendingSignals();
+
   callStartedAt = Date.now();
   callTimerHandle = setInterval(() => {
     const s = Math.floor((Date.now() - callStartedAt) / 1000);
@@ -420,20 +425,65 @@ async function startAsAnswerer() {
   }, 1000);
 }
 
+// See kiosk.js's handleSignal for why this buffer exists: the 'signal' WS
+// message handler above does not wait for each async handleSignal() call
+// to finish before dispatching the next message, so an ICE candidate can
+// arrive while setRemoteDescription() for the offer is still pending.
+// addIceCandidate() then throws (no remote description yet) and that was
+// being silently swallowed — dropping candidates the connection needed,
+// which made calls fail to connect and get killed by the connect timeout
+// a few seconds after the agent answered. Buffering until the remote
+// description is set, then flushing, is the standard fix.
+let pendingIceCandidates = [];
+
+// This is the bigger, related race: the guest sends its offer the moment
+// it gets 'call-accepted', but startAsAnswerer() above still has to await
+// getUserMedia() (camera/mic prompt) and getIceServers() (a network fetch)
+// before `pc` exists here. If the offer — and the ICE candidates right
+// behind it — arrive before that finishes, `if (!pc) return;` used to
+// silently drop the offer entirely, so no answer was ever sent back.
+// That's what "rings, then dies a few seconds later" actually was: not a
+// slow network, but the answer never being sent. Queue any signal that
+// arrives before `pc` exists, and flush it in order once startAsAnswerer()
+// finishes setting up the peer connection.
+let pendingSignals = [];
+
+async function flushPendingSignals() {
+  const queued = pendingSignals;
+  pendingSignals = [];
+  for (const { signalType, data } of queued) {
+    await handleSignal(signalType, data);
+  }
+}
+
 async function handleSignal(signalType, data) {
-  if (!pc) return;
+  if (!pc) {
+    pendingSignals.push({ signalType, data });
+    return;
+  }
   if (signalType === 'offer') {
     await pc.setRemoteDescription(new RTCSessionDescription(data));
+    const queued = pendingIceCandidates;
+    pendingIceCandidates = [];
+    for (const candidate of queued) {
+      try { await pc.addIceCandidate(candidate); } catch (e) { console.warn('ICE add failed', e); }
+    }
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     wsSend({ type: 'signal', callId: currentCallId, signalType: 'answer', data: answer });
   } else if (signalType === 'ice') {
-    try { await pc.addIceCandidate(data); } catch (e) { console.warn('ICE add failed', e); }
+    if (pc.remoteDescription) {
+      try { await pc.addIceCandidate(data); } catch (e) { console.warn('ICE add failed', e); }
+    } else {
+      pendingIceCandidates.push(data);
+    }
   }
 }
 
 function endActiveCallUI() {
   clearTimeout(connectTimeoutHandle);
+  pendingIceCandidates = [];
+  pendingSignals = [];
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   clearInterval(callTimerHandle);

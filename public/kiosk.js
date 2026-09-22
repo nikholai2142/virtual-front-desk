@@ -133,12 +133,32 @@ async function handleServerMessage(msg) {
   }
 }
 
+// ICE candidates can arrive (via the 'signal' WS message handler above,
+// which does not wait for each async handleSignal() call to finish before
+// the next message is dispatched) before setRemoteDescription() for the
+// answer has resolved. Calling addIceCandidate() with no remote
+// description yet throws, and that failure was previously being silently
+// swallowed — dropping candidates the connection needed, which was
+// causing calls to fail to connect and get killed by the connect timeout.
+// Buffering until the remote description is set (then flushing) is the
+// standard fix.
+let pendingIceCandidates = [];
+
 async function handleSignal(signalType, data) {
   if (!pc) return;
   if (signalType === 'answer') {
     await pc.setRemoteDescription(new RTCSessionDescription(data));
+    const queued = pendingIceCandidates;
+    pendingIceCandidates = [];
+    for (const candidate of queued) {
+      try { await pc.addIceCandidate(candidate); } catch (e) { console.warn('ICE add failed', e); }
+    }
   } else if (signalType === 'ice') {
-    try { await pc.addIceCandidate(data); } catch (e) { console.warn('ICE add failed', e); }
+    if (pc.remoteDescription) {
+      try { await pc.addIceCandidate(data); } catch (e) { console.warn('ICE add failed', e); }
+    } else {
+      pendingIceCandidates.push(data);
+    }
   }
 }
 
@@ -244,6 +264,7 @@ function cleanupCall() {
   stopWaitTimer();
   stopCallTimer();
   clearTimeout(connectTimeoutHandle);
+  pendingIceCandidates = [];
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   micOn = true; camOn = true;
