@@ -938,9 +938,62 @@ const activeRecordings = new Map();
 // endpoint shouldn't be able to fill the disk.
 const MAX_RECORDING_BYTES = 750 * 1024 * 1024;
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+/** Turns an agent/kiosk name into a filesystem-safe slug for the recording filename below. */
+function slugForFilename(raw, fallback) {
+  const slug = String(raw || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug || fallback;
+}
+
+/**
+ * Recording filenames read as `agent-kiosk-ddmmyyyy-hhmm.webm` — meant to
+ * be identifiable at a glance in a file browser or the R2 dashboard,
+ * without having to open the app. The date/time reflects the server's own
+ * local timezone (Node's default `Date` behavior) — set the `TZ`
+ * environment variable to your hotel's timezone (e.g.
+ * `Asia/Kuala_Lumpur`) if the server's default doesn't already match, so
+ * filenames read in local time rather than UTC.
+ *
+ * This runs once per call, right when its first recording chunk arrives.
+ * Usually that's mid-call, while `calls` still has the live entry
+ * (agentName is set there as soon as `answer-call` runs, kioskId since the
+ * call was created). But for a very short call, the browser may not flush
+ * any chunk until the call is already wrapping up — by then `endCall()`
+ * has deleted the `calls` entry and pushed the finished call into
+ * `callLog` instead, so that's the fallback rather than silently landing
+ * on a generic "agent-kiosk" name.
+ */
 function safeRecordingFilename(callId) {
-  const safeId = String(callId).replace(/[^0-9]/g, '') || '0';
-  return `call-${safeId}-${Date.now()}.webm`;
+  const call = calls.get(callId) || callLog.find((e) => e.callId === callId);
+  const agentSlug = slugForFilename(call?.agentName, 'agent');
+  const kioskSlug = slugForFilename(call?.kioskId, 'kiosk');
+  const now = new Date();
+  const dateStamp = `${pad2(now.getDate())}${pad2(now.getMonth() + 1)}${now.getFullYear()}`;
+  const timeStamp = `${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+  const base = `${agentSlug}-${kioskSlug}-${dateStamp}-${timeStamp}`;
+
+  // Two recordings can land on the same agent+kiosk+minute (the same agent
+  // taking back-to-back calls at the same kiosk) — append a numeric suffix
+  // rather than silently overwrite an earlier recording of the same name.
+  // Checked against both local disk and the in-memory index, since a
+  // finished recording may already be on R2 with its local copy deleted.
+  let filename = `${base}.webm`;
+  let n = 2;
+  while (
+    fs.existsSync(path.join(RECORDINGS_DIR, filename)) ||
+    recordingsIndex.some((r) => r.filename === filename)
+  ) {
+    filename = `${base}-${n}.webm`;
+    n += 1;
+  }
+  return filename;
 }
 
 async function handleRecordingChunk(req, res, urlObj) {

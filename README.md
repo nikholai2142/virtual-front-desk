@@ -173,6 +173,18 @@ a couple of seconds' worth of chunks at a time as the call happens.
   appear — the last few seconds of video have to finish uploading first).
 - Recordings are `.webm` files (video + audio) saved under `recordings/`
   next to `server.js`, indexed in `recordings/index.json`.
+- **Filenames read as `agent-kiosk-ddmmyyyy-hhmm.webm`** — e.g.
+  `Alex-PoolDeck-28092026-1453.webm` — so a recording is identifiable at a
+  glance in a file browser or the R2 dashboard, without having to open the
+  app. The agent and kiosk names are slugified (spaces/punctuation stripped
+  down to letters, numbers and hyphens) to keep them filesystem- and
+  URL-safe. The date/time is the server's own local time (Node's default
+  `Date` behavior) — set the `TZ` environment variable to your hotel's
+  timezone (e.g. `Asia/Kuala_Lumpur`) on Render if the server's default
+  doesn't already match, so filenames read in local time rather than UTC.
+  If the same agent takes two calls at the same kiosk within the same
+  minute, the second recording gets a `-2` suffix rather than overwriting
+  the first.
 
 ### Storage — local disk by default, Cloudflare R2 for real persistence
 
