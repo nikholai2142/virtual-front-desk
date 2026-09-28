@@ -168,9 +168,79 @@ async function deleteObject(key) {
   }
 }
 
+function xmlUnescape(str) {
+  return str
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Sums the size of every object in the bucket via the S3-compatible
+ * ListObjectsV2 API (paginating with continuation tokens for buckets with
+ * more than 1000 objects). R2 bills storage like S3 rather than enforcing a
+ * hard quota, so there's no "space left" to report — this returns actual
+ * usage, which server.js compares against a free-tier reference. Throws on
+ * failure — callers decide the fallback (same convention as putObject).
+ */
+async function getStorageSummary() {
+  assertConfigured();
+  let bytesUsed = 0;
+  let objectCount = 0;
+  let continuationToken = null;
+
+  do {
+    const queryParams = { 'list-type': '2', 'max-keys': '1000' };
+    if (continuationToken) queryParams['continuation-token'] = continuationToken;
+
+    const { amzDate, dateStamp } = amzDateParts(new Date());
+    const payloadHash = sha256Hex(Buffer.alloc(0));
+    const canonicalUri = '/' + BUCKET;
+    const canonicalQueryString = Object.keys(queryParams)
+      .sort()
+      .map((k) => `${uriEncode(k, true)}=${uriEncode(queryParams[k], true)}`)
+      .join('&');
+    const canonicalHeaders = `host:${HOST}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+    const canonicalRequest = ['GET', canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+    const credentialScope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+    const signature = hmac(signingKey(dateStamp), stringToSign).toString('hex');
+    const authorization = `AWS4-HMAC-SHA256 Credential=${ACCESS_KEY_ID}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    const res = await fetch(`https://${HOST}${canonicalUri}?${canonicalQueryString}`, {
+      method: 'GET',
+      headers: { 'X-Amz-Content-Sha256': payloadHash, 'X-Amz-Date': amzDate, Authorization: authorization },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`R2 list failed (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    }
+    const xml = await res.text();
+
+    // Cheap hand-rolled parsing rather than pulling in an XML library —
+    // ListObjectsV2's response is flat enough that these two regexes are
+    // reliable (Size is always a plain integer; the count of <Size> tags
+    // is the object count on this page).
+    for (const m of xml.matchAll(/<Size>(\d+)<\/Size>/g)) {
+      bytesUsed += Number(m[1]);
+      objectCount += 1;
+    }
+
+    const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+    const tokenMatch = xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/);
+    continuationToken = truncated && tokenMatch ? xmlUnescape(tokenMatch[1]) : null;
+  } while (continuationToken);
+
+  return { bytesUsed, objectCount };
+}
+
 module.exports = {
   configured,
   putObject,
   getPresignedUrl,
   deleteObject,
+  getStorageSummary,
 };

@@ -7,6 +7,7 @@
   --sub: #9fb0cc;
   --danger: #e5484d;
   --good: #22c55e;
+  --warning: #f6c76a;
   --border: #22304f;
 }
 * { box-sizing: border-box; }
@@ -210,6 +211,25 @@ html, body {
 .hold-config-preview { color: var(--sub); font-size: 13px; flex: 1 1 auto; }
 .hold-config-row button { flex: 0 0 auto; width: auto; padding: 10px 20px; }
 #hold-config-error, #hold-config-success { margin: 10px 0 0; }
+
+/* Storage panel */
+.storage-summary-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-bottom: 10px;
+}
+.storage-summary-row .storage-value { font-size: 22px; font-weight: 600; }
+.storage-summary-row .storage-of { color: var(--sub); font-size: 14px; }
+.storage-meter-track {
+  background: #1c2947; border-radius: 8px; height: 14px; overflow: hidden; margin-bottom: 8px;
+}
+.storage-meter-fill {
+  background: var(--accent); height: 100%; border-radius: 8px;
+  min-width: 2px; transition: width .3s ease, background-color .3s ease;
+}
+.storage-meter-fill.warning { background: var(--warning); }
+.storage-meter-fill.danger { background: var(--danger); }
+.storage-meta { color: var(--sub); font-size: 12px; margin: 0; }
+.storage-meta + .storage-meta { margin-top: 4px; }
+.storage-error { color: var(--danger); font-size: 13px; margin: 0 0 8px; }
 
 /* Agent detail modal */
 .agent-detail-card { max-width: 640px; max-height: 80vh; display: flex; flex-direction: column; }

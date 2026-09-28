@@ -207,8 +207,10 @@ configured at all.
    that) → **Create bucket**. Give it any name, e.g. `vfd-recordings`.
 2. Go to **R2** → **Manage API tokens** → **Create API token**. Give it
    **Object Read & Write** permission, scoped to just this bucket if you
-   want to be strict about it. This gives you an **Access Key ID** and a
-   **Secret Access Key** — copy both (the secret is only shown once).
+   want to be strict about it — this also covers listing the bucket's
+   contents, which is all the storage-usage panel (see "Storage usage"
+   below) needs. This gives you an **Access Key ID** and a **Secret Access
+   Key** — copy both (the secret is only shown once).
 3. You'll also need your **Account ID**, shown on the right side of the
    R2 overview page (or in the S3 API endpoint Cloudflare shows you,
    which looks like `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
@@ -268,6 +270,33 @@ camera resolution, this only controls what gets written to disk/R2.
 Recording also always prefers the VP9 codec over VP8 when the browser
 supports both (noticeably smaller for the same visual quality), falling
 back to VP8 only on a browser that can record but not encode VP9.
+
+### Storage usage
+
+The **Storage** panel on the admin dashboard's Configuration page (see
+"Admin dashboard" below) shows how much space your recordings are using
+right now:
+
+- **With R2 configured**, it lists the bucket (via the same S3-compatible
+  API used to upload/play recordings) and sums up the actual bytes stored,
+  shown as a meter against R2's **10GB/month free tier** — green while
+  there's plenty of headroom, amber past 60%, red past 90%. That free-tier
+  line is just a helpful reference, though, **not a hard cap**: R2 is
+  billed usage like any S3-compatible storage, not a fixed-size disk, so
+  going over it doesn't block uploads — it just means a small charge
+  (currently $0.015/GB-month for the overage; check [Cloudflare's current
+  R2 pricing](https://developers.cloudflare.com/r2/pricing/) for the
+  latest numbers). There's no API for "space left" because R2 doesn't have
+  a ceiling to report one against — actual usage vs. the free tier is the
+  closest honest equivalent.
+- **Without R2 configured**, it instead sums up whatever's on local disk
+  under `recordings/` right now, with a reminder that this disk isn't
+  persistent on Render — it's wiped on the next restart/redeploy, so
+  there's no fixed capacity to meter it against either.
+- Click **Refresh** on the panel to re-check without waiting for the next
+  page load. Listing a large bucket can take a moment (it pages through
+  1,000 objects at a time), so give it a few seconds on a bucket with a
+  lot of recordings.
 
 ### A note on consent
 
@@ -432,7 +461,9 @@ else:
 
 ### Configuration
 
-Currently just the maximum hold duration; see "Call hold" above.
+- **Maximum hold duration** — see "Call hold" above.
+- **Storage** — how much recording storage is currently in use, and where;
+  see "Storage usage" under "Call recordings" below.
 
 ### Password resets
 
@@ -733,7 +764,7 @@ virtual-front-desk/
 ├── store.js        Persistence layer: Upstash Redis if configured, else local-only fallback
 ├── chat.js         WhatsApp/Messenger: Graph API sending, webhook signature check + parsing
 ├── turn.js         Cloudflare TURN: mints short-lived WebRTC relay credentials per call
-├── r2.js           Cloudflare R2: signs S3-compatible requests to upload/serve call recordings
+├── r2.js           Cloudflare R2: signs S3-compatible requests to upload/serve/list call recordings
 ├── agents.json     Seed/fallback agent passwords/names — real source of truth is Redis once configured
 ├── admin.json      Admin dashboard password (default "letmein" — change this)
 ├── config.json     Seed/fallback video call configuration (currently: max hold duration)

@@ -37,6 +37,7 @@ function showAdminPage(pageId) {
   // The dashboard's chart/stats only need loading when the page is actually
   // shown — everything else is already kept fresh by refreshAll()'s poll.
   if (pageId === 'page-overview' && adminPassword) loadOverview();
+  if (pageId === 'page-config' && adminPassword) loadStorage();
 }
 
 document.querySelectorAll('.nav-btn').forEach((btn) => {
@@ -758,6 +759,67 @@ function formatDuration(totalSeconds) {
   const s = totalSeconds % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+// ---- Storage (R2 usage, or local recordings-disk usage as a fallback) ----
+
+function formatStorageBytes(n) {
+  if (!Number.isFinite(n)) return '—';
+  const GB = 1024 ** 3, MB = 1024 ** 2, KB = 1024;
+  if (n >= GB) return `${(n / GB).toFixed(2)} GB`;
+  if (n >= MB) return `${(n / MB).toFixed(1)} MB`;
+  if (n >= KB) return `${Math.round(n / KB)} KB`;
+  return `${n} B`;
+}
+
+async function loadStorage() {
+  const panel = document.getElementById('storage-panel');
+  panel.innerHTML = '<p class="sub-tight">Loading…</p>';
+  let data;
+  try {
+    data = await api('/api/admin/storage');
+  } catch (err) {
+    panel.innerHTML = `<p class="storage-error">Couldn't load storage usage: ${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  panel.innerHTML = renderStoragePanel(data);
+}
+
+function renderStoragePanel(data) {
+  if (data.error) {
+    const hint = data.backend === 'r2'
+      ? 'Check that the R2 API token has permission to list objects in this bucket.'
+      : '';
+    return (
+      `<p class="storage-error">Couldn't read usage from ${data.backend === 'r2' ? 'Cloudflare R2' : 'local disk'}: ${escapeHtml(data.error)}</p>` +
+      (hint ? `<p class="storage-meta">${hint}</p>` : '')
+    );
+  }
+
+  const used = formatStorageBytes(data.bytesUsed);
+  const objectWord = data.objectCount === 1 ? 'recording' : 'recordings';
+
+  if (data.backend === 'r2' && Number.isFinite(data.freeTierBytes) && data.freeTierBytes > 0) {
+    const pct = Math.min(100, (data.bytesUsed / data.freeTierBytes) * 100);
+    const severityClass = pct >= 90 ? 'danger' : pct >= 60 ? 'warning' : '';
+    const freeTierLabel = formatStorageBytes(data.freeTierBytes);
+    return (
+      `<div class="storage-summary-row"><span class="storage-value">${used}</span><span class="storage-of">of ${freeTierLabel} free tier (${pct.toFixed(1)}%)</span></div>` +
+      `<div class="storage-meter-track"><div class="storage-meter-fill ${severityClass}" style="width:${Math.max(2, pct)}%"></div></div>` +
+      `<p class="storage-meta">${data.objectCount.toLocaleString()} ${objectWord} stored in Cloudflare R2.</p>` +
+      `<p class="storage-meta">R2 doesn't cut you off past the free tier — it bills $0.015/GB-month beyond it. This meter is a reference point, not a hard limit.</p>`
+    );
+  }
+
+  // Local disk fallback: no fixed capacity to meter against, so just report
+  // what's there, plus a nudge that this disk doesn't survive a redeploy.
+  return (
+    `<div class="storage-summary-row"><span class="storage-value">${used}</span><span class="storage-of">on this server's local disk</span></div>` +
+    `<p class="storage-meta">${data.objectCount.toLocaleString()} ${objectWord} stored locally.</p>` +
+    `<p class="storage-meta">Local disk isn't persistent on Render — it's wiped on every restart or redeploy, and there's no fixed size to meter against. Configure Cloudflare R2 (see the README's "Call recordings" section) to keep recordings permanently and see real usage here.</p>`
+  );
+}
+
+document.getElementById('btn-refresh-storage').addEventListener('click', loadStorage);
 
 // ---- Add agent ----
 

@@ -686,6 +686,59 @@ function persistenceNote(storageStatus) {
   return 'Persistent storage is configured but not reachable right now, so this may be missing recent history and changes might not be saved. Check the Upstash database and the server logs.';
 }
 
+/**
+ * R2's Standard storage free tier, in bytes — used only as a helpful
+ * reference point for the admin dashboard's storage meter. R2 doesn't
+ * enforce a hard quota at this line the way a fixed disk would: it's
+ * billed usage (like S3), so going over it means a small monthly charge
+ * ($0.015/GB-month), not a blocked upload. See the README's "Call
+ * recordings" section.
+ */
+const R2_FREE_TIER_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB-month
+
+/** Sums the size of every file directly under recordings/ (the local-disk fallback used when R2 isn't configured). */
+async function getLocalRecordingsDiskUsage() {
+  let bytesUsed = 0;
+  let objectCount = 0;
+  let entries;
+  try {
+    entries = await fs.promises.readdir(RECORDINGS_DIR, { withFileTypes: true });
+  } catch (err) {
+    return { bytesUsed: 0, objectCount: 0, error: err.message };
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name === 'index.json') continue;
+    try {
+      const stat = await fs.promises.stat(path.join(RECORDINGS_DIR, entry.name));
+      bytesUsed += stat.size;
+      objectCount += 1;
+    } catch {
+      // file disappeared mid-scan (e.g. cleaned up concurrently) — skip it
+    }
+  }
+  return { bytesUsed, objectCount };
+}
+
+/**
+ * Storage usage for the admin dashboard's Configuration page: actual R2
+ * usage (listing the bucket) when R2 is configured, otherwise the local
+ * recordings/ directory — which is what's actually holding recordings on
+ * this server, and which the README already warns is wiped by every
+ * restart/redeploy on Render's ephemeral disk.
+ */
+async function getStorageUsage() {
+  if (r2.configured) {
+    try {
+      const { bytesUsed, objectCount } = await r2.getStorageSummary();
+      return { backend: 'r2', bytesUsed, objectCount, freeTierBytes: R2_FREE_TIER_BYTES };
+    } catch (err) {
+      return { backend: 'r2', error: err.message, freeTierBytes: R2_FREE_TIER_BYTES };
+    }
+  }
+  const local = await getLocalRecordingsDiskUsage();
+  return { backend: 'local', freeTierBytes: null, ...local };
+}
+
 /** Full call history + totals for one agent, including recording links — the admin dashboard's agent-detail view. */
 function computeAgentDetail(agent) {
   const entries = entriesForAgent(agent).sort((a, b) => b.answeredAt - a.answeredAt);
@@ -1307,6 +1360,15 @@ async function handleAdminApi(req, res, urlObj) {
       },
       note: persistenceNote(store.getStatus()),
     });
+    return;
+  }
+
+  // Storage usage for the Configuration page's Storage panel. R2 has no
+  // fixed capacity to report "space left" against, so this reports actual
+  // usage (bytesUsed/objectCount) plus the 10GB free-tier figure as a
+  // reference the client can turn into a meter.
+  if (urlObj.pathname === '/api/admin/storage' && req.method === 'GET') {
+    sendJson(res, 200, await getStorageUsage());
     return;
   }
 
