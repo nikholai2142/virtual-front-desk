@@ -627,6 +627,25 @@ async function startAsAnswerer() {
 // feed the combined stream into MediaRecorder. Chunks are uploaded to the
 // server every couple of seconds as the call happens, so a crashed tab
 // loses at most a couple of seconds rather than the whole recording.
+//
+// These four constants are the whole size/quality trade-off. Left at their
+// defaults, the video+audio bitrate is capped at ~382 kbps combined, which
+// works out to a ceiling of ~2.8 MB/minute — a real talking-head call (not
+// much motion) typically lands somewhat under that, closer to 1.5-2.5
+// MB/minute. Turn any of these down for smaller files, up for a sharper
+// picture:
+//   - RECORDING_WIDTH/HEIGHT: the canvas being recorded (not the on-screen
+//     video, which stays full quality for the live call itself).
+//   - RECORDING_FPS: frames captured per second. Talking heads don't need
+//     much — 15 still looks smooth for this kind of call.
+//   - RECORDING_VIDEO/AUDIO_BITRATE: hard caps passed to MediaRecorder. This
+//     is the single biggest lever — without it, the browser picks its own
+//     (often much higher) bitrate and file size is a lot less predictable.
+const RECORDING_WIDTH = 640;
+const RECORDING_HEIGHT = 360;
+const RECORDING_FPS = 15;
+const RECORDING_VIDEO_BITRATE = 350_000; // ~350 kbps
+const RECORDING_AUDIO_BITRATE = 32_000;  // ~32 kbps — plenty for speech
 
 /** Draws `videoEl` into the (x, y, w, h) box, letterboxed to preserve its aspect ratio. */
 function drawContain(ctx, videoEl, x, y, w, h) {
@@ -650,8 +669,8 @@ function startRecording(callId) {
     const remoteVideoEl = document.getElementById('remote-video');
     const localVideoEl = document.getElementById('local-video');
     const canvas = document.createElement('canvas');
-    canvas.width = 960;
-    canvas.height = 540;
+    canvas.width = RECORDING_WIDTH;
+    canvas.height = RECORDING_HEIGHT;
     const ctx = canvas.getContext('2d');
 
     const rec = { callId, rafId: null, uploadChain: Promise.resolve(), seq: 0, mediaRecorder: null, audioCtx: null };
@@ -668,7 +687,7 @@ function startRecording(callId) {
     };
     draw();
 
-    const canvasStream = canvas.captureStream(25);
+    const canvasStream = canvas.captureStream(RECORDING_FPS);
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     rec.audioCtx = audioCtx;
@@ -681,9 +700,17 @@ function startRecording(callId) {
     }
 
     const mixedStream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-    const mimeType = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
+    // VP9 first: noticeably smaller than VP8 at the same visual quality, and
+    // every browser that supports MediaRecorder well enough for this feature
+    // (Chrome/Edge/Firefox) also decodes VP9 fine. VP8 stays as a fallback
+    // for the rare browser that supports recording but not VP9.
+    const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
       .find((t) => MediaRecorder.isTypeSupported(t));
-    const mediaRecorder = new MediaRecorder(mixedStream, mimeType ? { mimeType } : undefined);
+    const mediaRecorder = new MediaRecorder(mixedStream, {
+      ...(mimeType ? { mimeType } : {}),
+      videoBitsPerSecond: RECORDING_VIDEO_BITRATE,
+      audioBitsPerSecond: RECORDING_AUDIO_BITRATE,
+    });
     rec.mediaRecorder = mediaRecorder;
     rec.mimeType = mediaRecorder.mimeType || mimeType || 'video/webm';
 

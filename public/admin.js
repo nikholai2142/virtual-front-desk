@@ -18,6 +18,31 @@ function showScreen(id) {
   screens[id].classList.add('active');
 }
 
+// ---- Admin page navigation (Dashboard / Agent Performance / User Management / Configuration) ----
+// Sign-in and the dashboard shell (topbar + nav) stay as they were; what
+// used to be one long scrolling page is now four, switched by the nav bar
+// below the topbar. Dashboard is the default landing page after sign-in.
+const adminPages = {};
+document.querySelectorAll('.admin-page').forEach((el) => (adminPages[el.id] = el));
+let currentAdminPage = 'page-overview';
+
+function showAdminPage(pageId) {
+  if (!adminPages[pageId]) return;
+  currentAdminPage = pageId;
+  Object.values(adminPages).forEach((el) => el.classList.remove('active'));
+  adminPages[pageId].classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.page === pageId);
+  });
+  // The dashboard's chart/stats only need loading when the page is actually
+  // shown — everything else is already kept fresh by refreshAll()'s poll.
+  if (pageId === 'page-overview' && adminPassword) loadOverview();
+}
+
+document.querySelectorAll('.nav-btn').forEach((btn) => {
+  btn.addEventListener('click', () => showAdminPage(btn.dataset.page));
+});
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -106,6 +131,7 @@ document.getElementById('btn-sign-out').addEventListener('click', () => {
 // ---- Dashboard ----
 
 function startDashboard() {
+  showAdminPage('page-overview'); // also triggers the first loadOverview()
   refreshAll();
   loadHoldConfig();
   clearInterval(refreshHandle);
@@ -123,7 +149,12 @@ async function refreshAll() {
     ]);
     renderAgents(agentsData.agents);
     renderStats(statsData);
+    renderPerfCharts(statsData.agents);
     renderResetRequests(resetData.requests);
+    // The dashboard's own filtered view only needs refreshing while it's
+    // actually the visible page — no point re-fetching and re-drawing a
+    // chart nobody's looking at every 10 seconds.
+    if (currentAdminPage === 'page-overview') loadOverview();
   } catch (err) {
     if (err.status === 401) {
       clearInterval(refreshHandle);
@@ -167,11 +198,15 @@ function renderAgents(agents) {
 
 function renderResetRequests(requests) {
   const badge = document.getElementById('reset-requests-badge');
+  const navBadge = document.getElementById('nav-users-badge');
   if (requests.length > 0) {
     badge.textContent = requests.length;
     badge.classList.remove('hidden');
+    navBadge.textContent = requests.length;
+    navBadge.classList.remove('hidden');
   } else {
     badge.classList.add('hidden');
+    navBadge.classList.add('hidden');
   }
 
   const list = document.getElementById('reset-requests-list');
@@ -279,6 +314,329 @@ function renderStats(data) {
       row.title = 'This agent has been removed — no detail view available';
     }
     table.appendChild(row);
+  });
+}
+
+// ---- Charts (hand-rolled SVG bar charts — no charting library, matching
+// the rest of this project's zero-dependency approach) ----
+
+/** Rounds a value up to a "clean" axis ceiling (1/2/5 × a power of ten), e.g. 34 -> 50. */
+function niceCeil(max) {
+  if (!Number.isFinite(max) || max <= 0) return 1;
+  const exp = Math.floor(Math.log10(max));
+  const base = Math.pow(10, exp);
+  const norm = max / base;
+  let niceNorm;
+  if (norm <= 1) niceNorm = 1;
+  else if (norm <= 2) niceNorm = 2;
+  else if (norm <= 5) niceNorm = 5;
+  else niceNorm = 10;
+  return niceNorm * base;
+}
+
+/** An SVG path for a bar rounded only at its data-end (top), square at the baseline. */
+function roundedTopBarPath(x, y, w, h, r) {
+  if (h <= 0) return '';
+  r = Math.max(0, Math.min(r, w / 2, h));
+  const bottom = y + h;
+  if (r === 0) return `M${x},${bottom} L${x},${y} L${x + w},${y} L${x + w},${bottom} Z`;
+  return `M${x},${bottom} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${bottom} Z`;
+}
+
+/**
+ * Renders a single-series column chart into `container` (an empty div).
+ * `buckets` is [{ label, value, ...anything else the caller wants to carry
+ * through to onBarClick }]. One hue throughout — these are all magnitude-
+ * by-category charts (calls per day, calls per agent, rating per agent),
+ * never multiple series, so there's no legend and no per-bar color coding;
+ * identity comes from the axis labels. The max bar gets a direct value
+ * label, every other value lives in the hover/focus tooltip — same data,
+ * just not shouted at the reader all at once.
+ */
+function renderColumnChart(container, buckets, opts) {
+  const {
+    color,
+    valueFormat = (v) => String(v),
+    tickFormat = (v) => String(Math.round(v)),
+    maxValueOverride,
+    ariaLabel = 'Chart',
+    emptyText = 'No data.',
+    onBarClick,
+  } = opts;
+
+  if (!buckets.length || buckets.every((b) => b.value === 0)) {
+    container.innerHTML = `<p class="empty-note">${escapeHtml(emptyText)}</p>`;
+    return;
+  }
+
+  const width = 960;
+  const height = 220;
+  const padTop = 26;
+  const padBottom = 30;
+  const padLeft = 4;
+  const padRight = 4;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const dataMax = Math.max(...buckets.map((b) => b.value));
+  const maxVal = maxValueOverride || niceCeil(dataMax);
+  const n = buckets.length;
+  const slot = plotW / n;
+  const barW = Math.max(2, Math.min(24, slot - 4));
+  const radius = Math.min(4, barW / 2);
+  const maxIndex = buckets.reduce((best, b, i) => (b.value > buckets[best].value ? i : best), 0);
+  const ticks = [0, maxVal / 2, maxVal];
+  const labelEvery = Math.max(1, Math.ceil(n / 14));
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="${escapeHtml(ariaLabel)}" preserveAspectRatio="none">`;
+
+  let lastTickLabel = null;
+  for (const t of ticks) {
+    const y = padTop + plotH - (maxVal ? (t / maxVal) * plotH : 0);
+    svg += `<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" class="chart-grid" />`;
+    // On a very small-scale chart (e.g. max value 1), rounding can make two
+    // distinct ticks (0.5 and 1) format to the same text ("1" and "1") —
+    // skip the duplicate label rather than print the same number twice.
+    const label = tickFormat(t);
+    if (label !== lastTickLabel) {
+      svg += `<text x="${padLeft}" y="${(y - 4).toFixed(1)}" class="chart-tick">${escapeHtml(label)}</text>`;
+      lastTickLabel = label;
+    }
+  }
+
+  buckets.forEach((b, i) => {
+    const slotX = padLeft + i * slot;
+    const barX = slotX + (slot - barW) / 2;
+    const h = maxVal ? (b.value / maxVal) * plotH : 0;
+    const barY = padTop + plotH - h;
+    svg += `<g class="chart-bar-group" tabindex="0" data-index="${i}">`;
+    svg += `<rect x="${slotX.toFixed(1)}" y="${padTop}" width="${slot.toFixed(1)}" height="${plotH}" class="chart-hit" />`;
+    if (h > 0) {
+      svg += `<path d="${roundedTopBarPath(barX, barY, barW, h, radius)}" class="chart-bar" fill="${color}" />`;
+    }
+    if (i === maxIndex && b.value > 0) {
+      svg += `<text x="${(barX + barW / 2).toFixed(1)}" y="${(barY - 8).toFixed(1)}" class="chart-value-label" text-anchor="middle">${escapeHtml(valueFormat(b.value))}</text>`;
+    }
+    svg += `</g>`;
+  });
+
+  buckets.forEach((b, i) => {
+    if (i % labelEvery !== 0 && i !== n - 1) return;
+    const x = padLeft + i * slot + slot / 2;
+    svg += `<text x="${x.toFixed(1)}" y="${height - padBottom + 16}" class="chart-axis-label" text-anchor="middle">${escapeHtml(b.label)}</text>`;
+  });
+
+  svg += `</svg><div class="chart-tooltip hidden"></div>`;
+  container.innerHTML = svg;
+
+  const tooltip = container.querySelector('.chart-tooltip');
+  container.querySelectorAll('.chart-bar-group').forEach((g) => {
+    const idx = Number(g.dataset.index);
+    const bucket = buckets[idx];
+    const show = () => {
+      tooltip.innerHTML = '';
+      const strong = document.createElement('strong');
+      strong.textContent = valueFormat(bucket.value);
+      const span = document.createElement('span');
+      span.textContent = ' · ' + bucket.label;
+      tooltip.appendChild(strong);
+      tooltip.appendChild(span);
+      tooltip.classList.remove('hidden');
+      const pct = (idx + 0.5) / n;
+      tooltip.style.left = `${(pct * container.clientWidth).toFixed(0)}px`;
+      g.querySelector('.chart-bar')?.classList.add('chart-bar-hover');
+    };
+    const hide = () => {
+      tooltip.classList.add('hidden');
+      g.querySelector('.chart-bar')?.classList.remove('chart-bar-hover');
+    };
+    g.addEventListener('pointerenter', show);
+    g.addEventListener('pointerleave', hide);
+    g.addEventListener('focus', show);
+    g.addEventListener('blur', hide);
+    if (onBarClick) {
+      g.style.cursor = 'pointer';
+      g.addEventListener('click', () => onBarClick(bucket, idx));
+      g.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter' || evt.key === ' ') { evt.preventDefault(); onBarClick(bucket, idx); }
+      });
+    }
+  });
+}
+
+/** Calls-handled and average-rating bar charts on the Agent Performance page — one bar per agent, clicking either opens that agent's detail view. */
+function renderPerfCharts(stats) {
+  const sorted = [...stats].sort((a, b) => b.calls - a.calls);
+
+  const callsBuckets = sorted.map((s) => ({ label: s.agentName, value: s.calls, agentId: s.agentId }));
+  renderColumnChart(document.getElementById('perf-calls-chart'), callsBuckets, {
+    color: 'var(--accent)',
+    valueFormat: (v) => `${v} call${v === 1 ? '' : 's'}`,
+    ariaLabel: 'Calls handled per agent',
+    emptyText: 'No calls yet.',
+    onBarClick: (b) => { if (b.agentId) openAgentDetail(b.agentId); },
+  });
+
+  const rated = sorted.filter((s) => s.ratingCount > 0);
+  const ratingBuckets = rated.map((s) => ({ label: s.agentName, value: s.avgRating, agentId: s.agentId }));
+  renderColumnChart(document.getElementById('perf-rating-chart'), ratingBuckets, {
+    color: '#f6c76a',
+    maxValueOverride: 5,
+    valueFormat: (v) => `★ ${v.toFixed(1)}`,
+    tickFormat: (v) => v.toFixed(1),
+    ariaLabel: 'Average rating per agent',
+    emptyText: 'No ratings yet.',
+    onBarClick: (b) => { if (b.agentId) openAgentDetail(b.agentId); },
+  });
+}
+
+// ---- Dashboard (filterable combined stats + calls-over-time chart) ----
+
+let lastOverviewEntries = [];
+let lastOverviewRange = { from: null, to: null };
+
+function resolveDateRange() {
+  const preset = document.getElementById('filter-range').value;
+  const now = new Date();
+  if (preset === 'custom') {
+    const fromVal = document.getElementById('filter-from').value;
+    const toVal = document.getElementById('filter-to').value;
+    const from = fromVal ? new Date(`${fromVal}T00:00:00`).getTime() : null;
+    const to = toVal ? new Date(`${toVal}T23:59:59.999`).getTime() : Date.now();
+    return { from, to };
+  }
+  if (preset === 'all') return { from: null, to: null };
+  if (preset === 'today') {
+    return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(), to: Date.now() };
+  }
+  if (preset === 'month') {
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to: Date.now() };
+  }
+  const days = Number(preset);
+  return { from: Date.now() - days * 86400000, to: Date.now() };
+}
+
+document.getElementById('filter-range').addEventListener('change', () => {
+  const isCustom = document.getElementById('filter-range').value === 'custom';
+  document.getElementById('filter-from-field').classList.toggle('hidden', !isCustom);
+  document.getElementById('filter-to-field').classList.toggle('hidden', !isCustom);
+  loadOverview();
+});
+['filter-from', 'filter-to', 'filter-agent', 'filter-kiosk'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', loadOverview);
+});
+document.getElementById('filter-groupby').addEventListener('change', renderCallsChartFromCache);
+
+/** Fills the agent/kiosk filter <select>s from the endpoint's own filter option lists, preserving whatever the admin already had picked. */
+function populateFilterOptions(filters) {
+  const agentSel = document.getElementById('filter-agent');
+  const kioskSel = document.getElementById('filter-kiosk');
+  const prevAgent = agentSel.value;
+  const prevKiosk = kioskSel.value;
+  agentSel.innerHTML = '<option value="">All agents</option>' +
+    filters.agents.map((a) => `<option value="${escapeHtml(a.value)}">${escapeHtml(a.label)}</option>`).join('');
+  kioskSel.innerHTML = '<option value="">All kiosks</option>' +
+    filters.kiosks.map((k) => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
+  if ([...agentSel.options].some((o) => o.value === prevAgent)) agentSel.value = prevAgent;
+  if ([...kioskSel.options].some((o) => o.value === prevKiosk)) kioskSel.value = prevKiosk;
+}
+
+async function loadOverview() {
+  const { from, to } = resolveDateRange();
+  lastOverviewRange = { from, to };
+  const agentId = document.getElementById('filter-agent').value;
+  const kioskId = document.getElementById('filter-kiosk').value;
+  const params = new URLSearchParams();
+  if (from !== null) params.set('from', from);
+  if (to !== null) params.set('to', to);
+  if (agentId) params.set('agentId', agentId);
+  if (kioskId) params.set('kioskId', kioskId);
+  try {
+    const data = await api(`/api/admin/stats/overview?${params.toString()}`);
+    populateFilterOptions(data.filters);
+    document.getElementById('ov-note').textContent = data.note;
+    renderOverviewTiles(data.totals);
+    lastOverviewEntries = data.entries;
+    renderCallsChartFromCache();
+  } catch (err) {
+    if (err.status === 401) return; // the next refreshAll() tick will handle bouncing back to sign-in
+    console.warn('Could not load dashboard overview:', err);
+  }
+}
+
+function renderOverviewTiles(t) {
+  document.getElementById('ov-calls').textContent = t.calls;
+  document.getElementById('ov-avg-talk').textContent = formatDuration(t.avgTalkSeconds);
+  document.getElementById('ov-total-talk').textContent = formatDuration(t.totalTalkSeconds);
+  document.getElementById('ov-hold').textContent = t.totalHoldCount ? `${formatDuration(t.totalHoldSeconds)} (${t.totalHoldCount}×)` : '0:00';
+  document.getElementById('ov-rating').textContent = t.ratingCount ? `${starGlyphs(t.avgRating)} ${t.avgRating.toFixed(1)}` : '—';
+}
+
+/** Groups filtered call entries into day or month buckets spanning the resolved range (zero-filled, so gaps show as gaps, not a shorter chart). Bucketing happens in the admin's own browser timezone — the server only filters, it doesn't guess a timezone. */
+function bucketEntries(entries, groupBy, from, to) {
+  const counts = new Map();
+  for (const e of entries) {
+    const d = new Date(e.answeredAt);
+    const key = groupBy === 'month'
+      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  let start, end;
+  if (Number.isFinite(from) && Number.isFinite(to)) {
+    start = new Date(from);
+    end = new Date(to);
+  } else if (entries.length) {
+    const times = entries.map((e) => e.answeredAt);
+    start = new Date(Math.min(...times));
+    end = new Date(Math.max(...times));
+  } else {
+    start = new Date();
+    end = new Date();
+  }
+
+  const buckets = [];
+  if (groupBy === 'month') {
+    const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+    const endM = new Date(end.getFullYear(), end.getMonth(), 1);
+    while (cur <= endM) {
+      const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+      buckets.push({ key, label: cur.toLocaleDateString(undefined, { month: 'short', year: '2-digit' }), value: counts.get(key) || 0 });
+      cur.setMonth(cur.getMonth() + 1);
+    }
+  } else {
+    const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    const endD = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    while (cur <= endD) {
+      const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+      buckets.push({ key, label: cur.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), value: counts.get(key) || 0 });
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
+  return buckets;
+}
+
+/** Re-buckets and redraws the "Calls over time" chart from the last-fetched entries — no refetch needed just to switch Day/Month grouping. */
+function renderCallsChartFromCache() {
+  let groupBy = document.getElementById('filter-groupby').value;
+  const { from, to } = lastOverviewRange;
+  let buckets = bucketEntries(lastOverviewEntries, groupBy, from, to);
+  const noteEl = document.getElementById('ov-chart-note');
+  if (groupBy === 'day' && buckets.length > 120) {
+    // A daily bar per day over a multi-month range is unreadable — fall back
+    // to month buckets automatically rather than rendering 200+ slivers.
+    groupBy = 'month';
+    buckets = bucketEntries(lastOverviewEntries, groupBy, from, to);
+    noteEl.textContent = 'Showing by month — the selected range is too wide for a daily view.';
+  } else {
+    noteEl.textContent = '';
+  }
+  renderColumnChart(document.getElementById('calls-chart'), buckets, {
+    color: 'var(--accent)',
+    valueFormat: (v) => `${v} call${v === 1 ? '' : 's'}`,
+    ariaLabel: 'Calls over time',
+    emptyText: 'No calls in this range.',
   });
 }
 

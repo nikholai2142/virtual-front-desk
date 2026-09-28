@@ -655,6 +655,37 @@ function computeAgentStats() {
   return rows.sort((a, b) => b.calls - a.calls);
 }
 
+/**
+ * True if a call log entry matches the Dashboard's agent filter. `filterValue`
+ * is either a known agent's id, or `name:<agentName>` for an agent that's
+ * since been removed (the admin picks these from the same orphan rows
+ * computeAgentStats() already groups by name — see there for why matching
+ * falls back to name for entries recorded before `agentId` existed).
+ */
+function entryMatchesAgentFilter(e, filterValue) {
+  if (!filterValue) return true;
+  if (filterValue.startsWith('name:')) {
+    const name = decodeURIComponent(filterValue.slice(5));
+    const knownIds = new Set(AGENTS.map((a) => a.id));
+    const knownNames = new Set(AGENTS.map((a) => a.name));
+    const belongsToKnownAgent = e.agentId ? knownIds.has(e.agentId) : knownNames.has(e.agentName);
+    if (belongsToKnownAgent) return false; // this name now belongs to a current agent — let their own id-based filter match instead
+    return (e.agentName || 'Unknown') === name;
+  }
+  return e.agentId === filterValue;
+}
+
+/** The human-readable explanation of what the stats do/don't cover, shown under both the Dashboard and Agent Performance pages. */
+function persistenceNote(storageStatus) {
+  if (!storageStatus.configured) {
+    return `Persistent storage isn't set up, so this only covers the last ${LOCAL_ONLY_CALL_LOG_LIMIT} calls and resets whenever the server restarts. See the README's "Persistent storage" section to make it permanent.`;
+  }
+  if (storageStatus.connected) {
+    return 'Stats cover all-time call history, persisted to Redis — this survives restarts and redeploys.';
+  }
+  return 'Persistent storage is configured but not reachable right now, so this may be missing recent history and changes might not be saved. Check the Upstash database and the server logs.';
+}
+
 /** Full call history + totals for one agent, including recording links — the admin dashboard's agent-detail view. */
 function computeAgentDetail(agent) {
   const entries = entriesForAgent(agent).sort((a, b) => b.answeredAt - a.answeredAt);
@@ -1206,14 +1237,6 @@ async function handleAdminApi(req, res, urlObj) {
 
   if (urlObj.pathname === '/api/admin/stats' && req.method === 'GET') {
     const storageStatus = store.getStatus();
-    let note;
-    if (!storageStatus.configured) {
-      note = `Persistent storage isn't set up, so this only covers the last ${LOCAL_ONLY_CALL_LOG_LIMIT} calls and resets whenever the server restarts. See the README's "Persistent storage" section to make it permanent.`;
-    } else if (storageStatus.connected) {
-      note = 'Stats cover all-time call history, persisted to Redis — this survives restarts and redeploys.';
-    } else {
-      note = 'Persistent storage is configured but not reachable right now, so this may be missing recent history and changes might not be saved. Check the Upstash database and the server logs.';
-    }
     sendJson(res, 200, {
       agents: computeAgentStats(),
       totals: {
@@ -1223,7 +1246,66 @@ async function handleAdminApi(req, res, urlObj) {
         activeCalls: calls.size,
       },
       storage: storageStatus,
-      note,
+      note: persistenceNote(storageStatus),
+    });
+    return;
+  }
+
+  // Dashboard: combined call stats filterable by date range, agent, and
+  // kiosk. The client resolves whatever preset/custom range it's showing
+  // into explicit from/to timestamps (ms since epoch) — this endpoint just
+  // filters callLog against them, plus the agent/kiosk filters, and hands
+  // back both the totals (via the same statsForEntries() used everywhere
+  // else, so the numbers always agree) and the raw matching entries, which
+  // the client buckets by day/month itself (in the admin's own timezone —
+  // bucketing this server-side would mean guessing a timezone to use).
+  if (urlObj.pathname === '/api/admin/stats/overview' && req.method === 'GET') {
+    const params = urlObj.searchParams;
+    const fromParam = params.get('from');
+    const toParam = params.get('to');
+    const agentFilter = params.get('agentId') || '';
+    const kioskFilter = params.get('kioskId') || '';
+    const from = fromParam ? Number(fromParam) : null;
+    const to = toParam ? Number(toParam) : null;
+
+    const filtered = callLog.filter((e) => {
+      if (Number.isFinite(from) && e.answeredAt < from) return false;
+      if (Number.isFinite(to) && e.answeredAt > to) return false;
+      if (kioskFilter && e.kioskId !== kioskFilter) return false;
+      if (!entryMatchesAgentFilter(e, agentFilter)) return false;
+      return true;
+    });
+
+    const entries = filtered
+      .slice()
+      .sort((a, b) => b.answeredAt - a.answeredAt)
+      .map((e) => ({
+        callId: e.callId,
+        topic: e.topic,
+        kioskId: e.kioskId,
+        agentId: e.agentId,
+        agentName: e.agentName,
+        answeredAt: e.answeredAt,
+        endedAt: e.endedAt,
+        holdSeconds: e.holdSeconds,
+        holdCount: e.holdCount,
+        rating: ratingForCall(e.callId),
+      }));
+
+    const kioskSet = new Set();
+    for (const e of callLog) if (e.kioskId) kioskSet.add(e.kioskId);
+
+    sendJson(res, 200, {
+      totals: statsForEntries(filtered),
+      entries,
+      filters: {
+        agents: computeAgentStats().map((r) => ({
+          value: r.agentId || `name:${encodeURIComponent(r.agentName)}`,
+          label: r.agentName,
+        })),
+        kiosks: [...kioskSet].sort(),
+      },
+      note: persistenceNote(store.getStatus()),
     });
     return;
   }

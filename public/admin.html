@@ -31,51 +31,148 @@
       </div>
     </header>
 
-    <main class="layout">
-      <section class="panel panel-full">
-        <h2>Password reset requests <span id="reset-requests-badge" class="count-badge hidden">0</span></h2>
-        <div id="reset-requests-list" class="agents-list">
-          <p class="empty-note">No pending requests.</p>
+    <nav class="admin-nav" aria-label="Admin sections">
+      <button type="button" class="nav-btn active" data-page="page-overview">
+        <span class="nav-icon">📊</span> Dashboard
+      </button>
+      <button type="button" class="nav-btn" data-page="page-performance">
+        <span class="nav-icon">📈</span> Agent Performance
+      </button>
+      <button type="button" class="nav-btn" data-page="page-users">
+        <span class="nav-icon">👥</span> User Management
+        <span id="nav-users-badge" class="count-badge hidden">0</span>
+      </button>
+      <button type="button" class="nav-btn" data-page="page-config">
+        <span class="nav-icon">⚙️</span> Configuration
+      </button>
+    </nav>
+
+    <main class="admin-main">
+
+      <!-- DASHBOARD / OVERVIEW -->
+      <div id="page-overview" class="admin-page active">
+        <div class="filters-bar">
+          <div class="filter-field">
+            <label for="filter-range">Date range</label>
+            <select id="filter-range">
+              <option value="today">Today</option>
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="month">This month</option>
+              <option value="all">All time</option>
+              <option value="custom">Custom range…</option>
+            </select>
+          </div>
+          <div class="filter-field custom-date-field hidden" id="filter-from-field">
+            <label for="filter-from">From</label>
+            <input type="date" id="filter-from" />
+          </div>
+          <div class="filter-field custom-date-field hidden" id="filter-to-field">
+            <label for="filter-to">To</label>
+            <input type="date" id="filter-to" />
+          </div>
+          <div class="filter-field">
+            <label for="filter-agent">Agent</label>
+            <select id="filter-agent"><option value="">All agents</option></select>
+          </div>
+          <div class="filter-field">
+            <label for="filter-kiosk">Kiosk</label>
+            <select id="filter-kiosk"><option value="">All kiosks</option></select>
+          </div>
+          <div class="filter-field">
+            <label for="filter-groupby">Chart by</label>
+            <select id="filter-groupby">
+              <option value="day" selected>Day</option>
+              <option value="month">Month</option>
+            </select>
+          </div>
         </div>
-      </section>
 
-      <section class="panel">
-        <h2>Agents</h2>
-        <div id="agents-list" class="agents-list"></div>
+        <div class="stat-tiles">
+          <div class="stat-tile"><span class="stat-value" id="ov-calls">—</span><span class="stat-label">Calls</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-avg-talk">—</span><span class="stat-label">Avg talk time</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-total-talk">—</span><span class="stat-label">Total talk time</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-hold">—</span><span class="stat-label">On hold</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-rating">—</span><span class="stat-label">Avg rating</span></div>
+        </div>
 
-        <form id="add-agent-form" class="add-agent-form">
-          <h3>Add agent</h3>
-          <div class="add-agent-row">
-            <input id="new-agent-name" type="text" placeholder="Name" maxlength="60" />
-            <input id="new-agent-password" type="text" placeholder="Password" maxlength="60" />
-            <button type="submit" class="btn btn-primary">Add</button>
+        <section class="panel panel-full">
+          <div class="panel-head-row">
+            <h2>Calls over time</h2>
+            <span id="ov-chart-note" class="chart-note"></span>
           </div>
-          <p id="add-agent-error" class="error hidden"></p>
-        </form>
-      </section>
+          <div id="calls-chart" class="chart-wrap"></div>
+        </section>
 
-      <section class="panel">
-        <h2>Performance</h2>
+        <p id="ov-note" class="stats-note"></p>
+      </div>
+
+      <!-- AGENT PERFORMANCE -->
+      <div id="page-performance" class="admin-page">
         <p id="stats-note" class="stats-note"></p>
-        <p class="stats-hint">Click an agent for their full call history and recordings.</p>
-        <div id="stats-table" class="stats-table"></div>
-      </section>
 
-      <section class="panel panel-full">
-        <h2>Video call configuration</h2>
-        <form id="hold-config-form" class="hold-config-form">
-          <label for="hold-config-max-seconds">Maximum hold duration</label>
-          <p class="sub-tight">When an agent puts a call on hold, it resumes on its own after this long if nobody resumes it first. The agent is warned 30 seconds before it expires.</p>
-          <div class="hold-config-row">
-            <input id="hold-config-max-seconds" type="number" min="10" max="3600" step="5" />
-            <span class="hold-config-unit">seconds</span>
-            <span id="hold-config-preview" class="hold-config-preview"></span>
-            <button type="submit" class="btn btn-primary">Save</button>
+        <section class="panel panel-full">
+          <h2>Calls handled per agent</h2>
+          <div id="perf-calls-chart" class="chart-wrap"></div>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Average rating per agent</h2>
+          <div id="perf-rating-chart" class="chart-wrap"></div>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Agent details</h2>
+          <p class="stats-hint">Click an agent (or a bar above) for their full call history and recordings.</p>
+          <div id="stats-table" class="stats-table"></div>
+        </section>
+      </div>
+
+      <!-- USER MANAGEMENT -->
+      <div id="page-users" class="admin-page">
+        <section class="panel panel-full">
+          <h2>Password reset requests <span id="reset-requests-badge" class="count-badge hidden">0</span></h2>
+          <div id="reset-requests-list" class="agents-list">
+            <p class="empty-note">No pending requests.</p>
           </div>
-          <p id="hold-config-error" class="error hidden"></p>
-          <p id="hold-config-success" class="hint hidden"></p>
-        </form>
-      </section>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Agents</h2>
+          <div id="agents-list" class="agents-list"></div>
+
+          <form id="add-agent-form" class="add-agent-form">
+            <h3>Add agent</h3>
+            <div class="add-agent-row">
+              <input id="new-agent-name" type="text" placeholder="Name" maxlength="60" />
+              <input id="new-agent-password" type="text" placeholder="Password" maxlength="60" />
+              <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+            <p id="add-agent-error" class="error hidden"></p>
+          </form>
+        </section>
+      </div>
+
+      <!-- CONFIGURATION -->
+      <div id="page-config" class="admin-page">
+        <section class="panel panel-full">
+          <h2>Video call configuration</h2>
+          <form id="hold-config-form" class="hold-config-form">
+            <label for="hold-config-max-seconds">Maximum hold duration</label>
+            <p class="sub-tight">When an agent puts a call on hold, it resumes on its own after this long if nobody resumes it first. The agent is warned 30 seconds before it expires.</p>
+            <div class="hold-config-row">
+              <input id="hold-config-max-seconds" type="number" min="10" max="3600" step="5" />
+              <span class="hold-config-unit">seconds</span>
+              <span id="hold-config-preview" class="hold-config-preview"></span>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+            <p id="hold-config-error" class="error hidden"></p>
+            <p id="hold-config-success" class="hint hidden"></p>
+          </form>
+        </section>
+      </div>
+
     </main>
   </section>
 

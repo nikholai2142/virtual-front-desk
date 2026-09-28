@@ -240,6 +240,35 @@ stops accepting new data past **750MB** (`MAX_RECORDING_BYTES` in
 `server.js`), far beyond any real front-desk call, just so a stuck upload
 can't fill the disk (or run up an R2 bill).
 
+### Reducing file size
+
+Recordings are capped to a **~382 kbps combined video+audio bitrate** by
+default (640×360 at 15fps, plus 32kbps audio) — a real talking-head call
+typically comes out to **roughly 1.5-2.5 MB per minute**, not the several
+times that you'd get from letting the browser pick its own bitrate at full
+call resolution.
+
+All four knobs live together at the top of the "Call recording" section in
+`public/agent.js`:
+
+```js
+const RECORDING_WIDTH = 640;
+const RECORDING_HEIGHT = 360;
+const RECORDING_FPS = 15;
+const RECORDING_VIDEO_BITRATE = 350_000; // ~350 kbps
+const RECORDING_AUDIO_BITRATE = 32_000;  // ~32 kbps
+```
+
+Turn any of them down for smaller files (e.g. `RECORDING_VIDEO_BITRATE =
+200_000` cuts it further, at some cost to sharpness during motion), or up
+if a recording ever looks too soft/blocky. These only affect the saved
+recording — the live call itself always uses the guest and agent's full
+camera resolution, this only controls what gets written to disk/R2.
+
+Recording also always prefers the VP9 codec over VP8 when the browser
+supports both (noticeably smaller for the same visual quality), falling
+back to VP8 only on a browser that can record but not encode VP9.
+
 ### A note on consent
 
 Recording laws vary a lot by place — some require only one party to
@@ -333,7 +362,63 @@ Open `/admin` and sign in with the admin password (default `letmein`,
 stored in `admin.json` — **change it before real use**, the same way you'd
 change the demo agent passwords).
 
-From the dashboard you can:
+The dashboard is organized into four pages, switched from the nav bar under
+the header — **Dashboard** is what you land on right after signing in.
+
+- **Stay signed in across a page refresh** — both `/agent` and `/admin`
+  remember your session (via the browser's `sessionStorage`) until you
+  click **Sign out** or close the tab. Refreshing the page — or the
+  browser reconnecting after a Render free-tier cold start — no longer
+  drops you back to the sign-in screen.
+- **Change the admin password** — click the ⚙ button next to "Refresh" in
+  the header (this stays available on every page), enter the current
+  password and a new one. Takes effect immediately (your own session keeps
+  working without needing to sign in again).
+- A small **online / waiting / on-a-call** summary in the header always
+  reflects what's happening *right now*, independent of whatever the
+  Dashboard page's filters are set to.
+
+### Dashboard
+
+The default landing page — a combined view of call activity across every
+agent and kiosk, filterable by:
+
+- **Date range** — presets for Today, Last 7/30/90 days, This month, All
+  time, or a custom from/to range (pick the same day twice to look at just
+  that day, or a range spanning a month to look at just that month).
+- **Agent** — including agents that have since been removed; their
+  historical calls stay filterable by name.
+- **Kiosk** — every kiosk that's ever logged a call.
+
+The filters scope everything below them at once — the stat tiles (calls,
+average and total talk time, hold time, average rating) and the **calls
+over time** chart, which you can switch between daily and monthly bars.
+Picking a wide date range with daily bars automatically switches to
+monthly instead, rather than rendering a chart with hundreds of slivers.
+
+### Agent Performance
+
+A per-agent breakdown, **not** affected by the Dashboard's filters — this
+page is always all-time (or however far back your call history goes; see
+"Persistent storage" below). It shows:
+
+- A **calls handled per agent** bar chart and an **average rating per
+  agent** bar chart (agents with no ratings yet are left off the second
+  one). Hover or focus a bar for its exact value; **click a bar to open
+  that agent's detail view**, same as clicking their name below.
+- **Agent details** — the full per-agent list (calls, average/total talk
+  time, most common kiosk, hold time, rating, last call). **Click any
+  agent's row for their complete call history and recordings**: every
+  call with its date, duration, hold time, agent notes, a **▶ Play
+  recording** link where one exists, and the guest's rating (stars, name,
+  remarks) where one was given — including calls from before these
+  features existed (older entries just won't show a hold time or rating,
+  since neither was tracked yet).
+
+### User Management
+
+Agent accounts and password resets, previously mixed in with everything
+else:
 
 - **Add an agent** — enter a name and a password (at least 4 characters,
   letters/numbers/symbols all fine); it's added to the agent list
@@ -341,33 +426,13 @@ From the dashboard you can:
   needed).
 - **Remove an agent** — click "Remove" on any agent's row (asks for
   confirmation first).
-- **Change the admin password** — click the ⚙ button next to "Refresh",
-  enter the current password and a new one. Takes effect immediately (your
-  own session keeps working without needing to sign in again).
-- **Handle password reset requests** — see the "Password resets" section
-  below.
-- **Stay signed in across a page refresh** — both `/agent` and `/admin`
-  remember your session (via the browser's `sessionStorage`) until you
-  click **Sign out** or close the tab. Refreshing the page — or the
-  browser reconnecting after a Render free-tier cold start — no longer
-  drops you back to the sign-in screen.
-- **See performance per agent** — calls handled, total and average talk
-  time, most common call topic, hold time (see "Call hold" above), average
-  guest rating (see "Guest ratings" above), and time of their last call. A
-  summary line at the top shows how many agents are currently online, how
-  many guests are waiting, and how many calls are active right now. The
-  dashboard refreshes itself every 10 seconds, or click "Refresh" for an
-  immediate update.
-- **Drill into one agent's full history** — click any agent's row in
-  Performance to open their complete call log: every call with its date,
-  duration, hold time, any notes the agent took, a **▶ Play recording**
-  link where one exists, and the guest's rating (stars, name, and
-  remarks) where one was given. This is the same data behind the summary
-  row, just unrolled per call — including calls from before these views
-  existed (older entries just won't show hold time or a rating, since
-  neither was tracked yet).
-- **Set video call configuration** — currently just the maximum hold
-  duration; see "Call hold" below.
+- **Handle password reset requests** — see "Password resets" below. A red
+  badge on the User Management tab itself, not just inside the page, shows
+  when one is waiting so it's hard to miss even from another page.
+
+### Configuration
+
+Currently just the maximum hold duration; see "Call hold" above.
 
 ### Password resets
 
@@ -400,8 +465,9 @@ you've set up persistent storage** — see the next section. Without it,
 added/removed agents and the call history it's added to reset the next
 time the server restarts (which on a free Render instance can happen
 often — see "What's real vs. what's stubbed" below), and stats only cover
-the last 200 calls since the last restart. The note under "Performance" on
-the dashboard itself always tells you which mode you're in.
+the last 200 calls since the last restart. A small note under the stats on
+both the Dashboard and Agent Performance pages always tells you which mode
+you're in.
 
 The admin API itself (`/api/admin/agents`, `/api/admin/stats`) is
 protected by a single shared password sent as an `X-Admin-Password`
@@ -467,8 +533,9 @@ see "Call recordings" below.)
 If you haven't already, upload `server.js` and the new `store.js` file to
 your GitHub repo (see "Running it" / your original deploy steps for how —
 same web-upload flow). Once both the code and the environment variables
-are in place and the service has redeployed, open `/admin` — the note
-under "Performance" should say stats are persisted to Redis. From then on,
+are in place and the service has redeployed, open `/admin` — the note on
+the Dashboard or Agent Performance page should say stats are persisted to
+Redis. From then on,
 every agent you add/remove and every completed call is saved there
 immediately, and will still be there after any restart or redeploy.
 
@@ -675,7 +742,7 @@ virtual-front-desk/
 └── public/
     ├── kiosk.html / kiosk.css / kiosk.js   Guest-facing lobby screen
     ├── agent.html / agent.css / agent.js   Agent dashboard (calls + WhatsApp/Messenger chats)
-    └── admin.html / admin.css / admin.js   Admin dashboard (add/remove agents, view stats)
+    └── admin.html / admin.css / admin.js   Admin dashboard (Dashboard, Agent Performance, User Management, Configuration)
 ```
 
 ## Customizing
