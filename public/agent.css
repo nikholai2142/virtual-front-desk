@@ -147,6 +147,7 @@ html, body {
 .log-recording a { color: var(--good); text-decoration: none; font-weight: 600; }
 .log-recording a:hover { text-decoration: underline; }
 .log-recording .rec-size { color: var(--sub); font-size: 11px; }
+.log-recording-missing { color: var(--sub); font-size: 12px; font-style: italic; }
 
 .call-panel { position: relative; padding: 20px; overflow-y: auto; }
 .no-call {

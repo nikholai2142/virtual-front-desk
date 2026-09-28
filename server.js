@@ -740,12 +740,19 @@ async function getStorageUsage() {
 }
 
 /** Full call history + totals for one agent, including recording links — the admin dashboard's agent-detail view. */
-function computeAgentDetail(agent) {
+async function computeAgentDetail(agent) {
   const entries = entriesForAgent(agent).sort((a, b) => b.answeredAt - a.answeredAt);
+  // Existence checks run in parallel (one per call that has a recording at
+  // all — recordingForCall() returns immediately for the rest) rather than
+  // one at a time, so a long-serving agent's full history doesn't turn this
+  // into a slow serial chain of R2 round trips.
+  const calls = await Promise.all(
+    entries.map(async (e) => ({ ...e, recording: await recordingForCall(e.callId), rating: ratingForCall(e.callId) }))
+  );
   return {
     agent: { id: agent.id, name: agent.name },
     totals: statsForEntries(entries),
-    calls: entries.map((e) => ({ ...e, recording: recordingForCall(e.callId), rating: ratingForCall(e.callId) })),
+    calls,
   };
 }
 
@@ -876,8 +883,15 @@ function saveRecordingsIndex() {
 // one viewing session without leaving a link usable long after.
 const RECORDING_URL_TTL_SECONDS = 60 * 60;
 
-/** Returns { url, bytes, mimeType } for a finished recording of this call, or null if there isn't one (yet, or ever). */
-function recordingForCall(callId) {
+/**
+ * Returns { url, bytes, mimeType } for a finished recording of this call,
+ * { missing: true, bytes, mimeType } if one was recorded but the
+ * underlying file/object is gone (deleted directly from R2, or off local
+ * disk by hand — this app never deletes a recording out from under its own
+ * index except via deleteObject() cleanup, so this only fires on outside
+ * deletion), or null if there isn't one (yet, or ever).
+ */
+async function recordingForCall(callId) {
   // Recordings finish uploading slightly after the call itself ends (the
   // agent's browser has to flush the last chunk), so the most recent call
   // in the log may briefly have no recording here yet.
@@ -885,12 +899,29 @@ function recordingForCall(callId) {
   if (!entry) return null;
 
   if (entry.backend === 'r2') {
+    let url;
     try {
-      return { url: r2.getPresignedUrl(entry.key, RECORDING_URL_TTL_SECONDS), bytes: entry.bytes, mimeType: entry.mimeType };
+      url = r2.getPresignedUrl(entry.key, RECORDING_URL_TTL_SECONDS);
     } catch (err) {
       console.error('[recordings] could not mint an R2 playback URL:', err.message);
       return null;
     }
+    try {
+      const exists = await r2.headObject(entry.key);
+      if (!exists) return { missing: true, bytes: entry.bytes, mimeType: entry.mimeType };
+    } catch (err) {
+      // Couldn't confirm either way (network blip, a token that can read
+      // objects but not HEAD them, etc.) — don't hide a recording that
+      // might still be there just because this one check failed; log it
+      // and fall through to handing back the link as usual.
+      console.error(`[recordings] could not verify ${entry.key} still exists in R2 (showing the link anyway):`, err.message);
+    }
+    return { url, bytes: entry.bytes, mimeType: entry.mimeType };
+  }
+
+  const localPath = path.join(RECORDINGS_DIR, entry.filename);
+  if (!fs.existsSync(localPath)) {
+    return { missing: true, bytes: entry.bytes, mimeType: entry.mimeType };
   }
   return {
     url: `/api/recordings/file/${encodeURIComponent(entry.filename)}`,
@@ -1210,7 +1241,7 @@ async function handleAdminApi(req, res, urlObj) {
     const id = decodeURIComponent(agentDetailMatch[1]);
     const agent = AGENTS.find((a) => a.id === id);
     if (!agent) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
-    sendJson(res, 200, computeAgentDetail(agent));
+    sendJson(res, 200, await computeAgentDetail(agent));
     return;
   }
 
@@ -1533,7 +1564,9 @@ function handleAgentConnection(conn) {
     }
 
     if (msg.type === 'get-log') {
-      const entries = callLog.slice(-50).reverse().map((e) => ({ ...e, recording: recordingForCall(e.callId), rating: ratingForCall(e.callId) }));
+      const entries = await Promise.all(
+        callLog.slice(-50).reverse().map(async (e) => ({ ...e, recording: await recordingForCall(e.callId), rating: ratingForCall(e.callId) }))
+      );
       conn.send({ type: 'call-log', entries });
       return;
     }

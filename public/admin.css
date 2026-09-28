@@ -251,6 +251,7 @@ html, body {
 .agent-call-recording a { color: var(--good); text-decoration: none; font-weight: 600; }
 .agent-call-recording a:hover { text-decoration: underline; }
 .agent-call-recording .rec-size { color: var(--sub); font-size: 11px; }
+.agent-call-recording-missing { color: var(--sub); font-size: 12px; font-style: italic; }
 .agent-call-rating { margin-top: 6px; }
 .agent-call-rating .acr-stars { color: #f6c76a; letter-spacing: 1px; }
 .agent-call-rating .acr-rater { color: var(--sub); font-size: 12px; }

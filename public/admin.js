@@ -685,7 +685,9 @@ function renderAgentDetail(data) {
     const holdPart = c.holdSeconds ? ` · on hold ${formatDuration(c.holdSeconds)}` : '';
     const notesPart = c.notes ? `<div class="acr-notes">"${escapeHtml(c.notes)}"</div>` : '';
     const recordingPart = c.recording
-      ? `<div class="agent-call-recording"><a href="${escapeHtml(c.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(c.recording.bytes)}</span></div>`
+      ? (c.recording.missing
+          ? `<div class="agent-call-recording agent-call-recording-missing">Recording no longer available</div>`
+          : `<div class="agent-call-recording"><a href="${escapeHtml(c.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(c.recording.bytes)}</span></div>`)
       : '';
     const ratingPart = c.rating
       ? `<div class="agent-call-rating"><span class="acr-stars">${starGlyphs(c.rating.stars)}</span>${c.rating.guestName ? ` <span class="acr-rater">— ${escapeHtml(c.rating.guestName)}</span>` : ''}${c.rating.remarks ? `<div class="acr-notes">"${escapeHtml(c.rating.remarks)}"</div>` : ''}</div>`

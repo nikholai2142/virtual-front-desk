@@ -450,7 +450,9 @@ function renderCallLog(entries) {
     const kioskPart = e.kioskId ? ` · ${escapeHtml(e.kioskId)}` : '';
     const holdPart = e.holdSeconds ? ` · on hold ${formatMMSS(e.holdSeconds)}` : '';
     const recordingPart = e.recording
-      ? `<div class="log-recording"><a href="${escapeHtml(e.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(e.recording.bytes)}</span></div>`
+      ? (e.recording.missing
+          ? `<div class="log-recording log-recording-missing">Recording no longer available</div>`
+          : `<div class="log-recording"><a href="${escapeHtml(e.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(e.recording.bytes)}</span></div>`)
       : '';
     div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong>${kioskPart} · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}${holdPart}${recordingPart}`;
     box.appendChild(div);

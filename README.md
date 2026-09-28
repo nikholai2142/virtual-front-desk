@@ -200,6 +200,20 @@ any reason (bad credentials, a network blip), the recording is **not
 lost** — it just stays on local disk instead, same as if R2 weren't
 configured at all.
 
+**If a recording is deleted directly from storage** (someone removes the
+object from the R2 bucket, or deletes the file from local disk by hand,
+outside this app) — the app catches this rather than leaving a dead link
+behind. Every time a call's recording link would be shown, the server
+double-checks the file/object is actually still there (a HEAD request to
+R2, or a plain file-existence check on local disk) before handing back a
+link. If it's gone, the **▶ Play recording** link is replaced with *"Recording
+no longer available"* instead of a link that fails when clicked. This check
+runs on every load rather than once, so it stays accurate even though this
+app has no way to be notified when something is deleted outside it. (A
+check that can't get a clear answer — a network blip, a token that can read
+objects but not confirm they exist — doesn't hide the recording; it assumes
+the link is still good rather than risk hiding one that's actually fine.)
+
 ### Setup
 
 1. Go to the [Cloudflare dashboard](https://dash.cloudflare.com) → **R2

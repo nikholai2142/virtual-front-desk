@@ -237,10 +237,43 @@ async function getStorageSummary() {
   return { bytesUsed, objectCount };
 }
 
+/**
+ * Checks whether an object still exists in the bucket (HEAD, no body
+ * transferred) — used to catch a recording that was deleted directly from
+ * the R2 bucket (outside this app) so a stale index entry can be told apart
+ * from a real, playable one. Returns true/false on a clear answer; throws
+ * on anything else (network error, auth failure, unexpected status) so
+ * callers can decide how to treat "couldn't tell" — this project's
+ * convention (see recordingForCall in server.js) is to assume it's still
+ * there rather than hide a recording over a transient check failure.
+ */
+async function headObject(key) {
+  assertConfigured();
+  const { amzDate, dateStamp } = amzDateParts(new Date());
+  const payloadHash = sha256Hex(Buffer.alloc(0));
+  const canonicalUri = canonicalUriFor(key);
+  const canonicalHeaders = `host:${HOST}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const canonicalRequest = ['HEAD', canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const credentialScope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+  const signature = hmac(signingKey(dateStamp), stringToSign).toString('hex');
+  const authorization = `AWS4-HMAC-SHA256 Credential=${ACCESS_KEY_ID}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const res = await fetch(`https://${HOST}${canonicalUri}`, {
+    method: 'HEAD',
+    headers: { 'X-Amz-Content-Sha256': payloadHash, 'X-Amz-Date': amzDate, Authorization: authorization },
+  });
+  if (res.status === 200) return true;
+  if (res.status === 404) return false;
+  throw new Error(`R2 existence check failed (HTTP ${res.status})`);
+}
+
 module.exports = {
   configured,
   putObject,
   getPresignedUrl,
   deleteObject,
   getStorageSummary,
+  headObject,
 };
