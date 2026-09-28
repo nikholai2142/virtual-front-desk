@@ -376,6 +376,16 @@ const agentConns = new Set();
 /** every live connection (guest + agent), so keepalive pings reach everyone */
 const allConns = new Set();
 const callLog = [];
+/**
+ * Calls that were never answered — the guest gave up waiting or lost their
+ * connection before an agent picked up. Kept separate from callLog (not
+ * merged in with a null agent/answeredAt) because callLog's stats math
+ * (statsForEntries, entriesForAgent, computeAgentStats, and the dashboard's
+ * date-range filter) all assume every entry has a real answeredAt — mixing
+ * in unanswered calls would corrupt those averages rather than just adding
+ * a zero.
+ */
+const missedCallLog = [];
 
 // ---- Agent password-reset requests ------------------------------------
 // An agent who forgot their password can request a reset from the login
@@ -511,6 +521,35 @@ function endCall(callId, reason) {
     // Fire-and-forget: ending a call should never wait on a network round
     // trip to Redis. Failures are logged inside store.js, not thrown here.
     store.appendCallLogEntry(entry).catch(() => {});
+
+    // The "Recent calls" list on every agent's dashboard is a shared,
+    // all-agent view (the server hands back callLog as a whole, not
+    // filtered to just that agent), so every signed-in agent needs to know
+    // it just changed — not only whichever agent happened to be on this
+    // particular call (that agent already gets their own 'call-ended'
+    // above, for their active-call UI). Without this, any other agent's
+    // list would silently go stale until they happened to refresh the page.
+    for (const a of agentConns) {
+      a.send({ type: 'call-log-changed' });
+    }
+  } else {
+    // Never answered — the guest gave up waiting ('guest-cancelled') or
+    // lost their connection before an agent could pick up
+    // ('guest-disconnected'). Tracked separately from callLog (see
+    // missedCallLog above) so the admin dashboard's "not answered" count
+    // reflects it without mixing an agent-less entry into the answered-call
+    // stats math.
+    const entry = {
+      callId,
+      topic: call.topic,
+      kioskId: call.kioskId,
+      queuedAt: call.queuedAt,
+      endedAt: Date.now(),
+      outcome: reason,
+    };
+    missedCallLog.push(entry);
+    if (!store.configured && missedCallLog.length > LOCAL_ONLY_CALL_LOG_LIMIT) missedCallLog.shift();
+    store.appendMissedCallEntry(entry).catch(() => {});
   }
   broadcastQueue();
 }
@@ -1431,9 +1470,25 @@ async function handleAdminApi(req, res, urlObj) {
 
     const kioskSet = new Set();
     for (const e of callLog) if (e.kioskId) kioskSet.add(e.kioskId);
+    for (const e of missedCallLog) if (e.kioskId) kioskSet.add(e.kioskId);
+
+    // Calls that never got answered at all (guest gave up waiting, or lost
+    // their connection before an agent picked up) — kept out of callLog
+    // entirely (see missedCallLog's comment), so counted here from its own
+    // list instead. There's no agent to filter these by (they never had
+    // one), so picking a specific agent zeroes this out rather than
+    // attributing someone else's missed calls to them.
+    const missedFiltered = agentFilter
+      ? []
+      : missedCallLog.filter((e) => {
+          if (Number.isFinite(from) && e.queuedAt < from) return false;
+          if (Number.isFinite(to) && e.queuedAt > to) return false;
+          if (kioskFilter && e.kioskId !== kioskFilter) return false;
+          return true;
+        });
 
     sendJson(res, 200, {
-      totals: statsForEntries(filtered),
+      totals: { ...statsForEntries(filtered), notAnswered: missedFiltered.length },
       entries,
       filters: {
         agents: computeAgentStats().map((r) => ({
@@ -1569,6 +1624,19 @@ function handleAgentConnection(conn) {
       const call = calls.get(callId);
       if (!call || !queue.includes(callId)) {
         conn.send({ type: 'answer-failed', callId, reason: 'already-taken' });
+        return;
+      }
+      // The queue-button guard in agent.js only stops a second answer from
+      // the SAME browser tab (it checks its own local currentCallId) — it
+      // has no idea this agent is also signed in elsewhere. Since an agent
+      // password isn't tied to one device or tab, the same agent can be
+      // logged in on a second phone/tablet/browser at the same time; without
+      // this check, that second session could answer an entirely different
+      // call and put one agent on two simultaneous video calls. Check across
+      // every active call (not just this connection) by agentId instead.
+      const alreadyOnACall = [...calls.values()].some((c) => c.agentId === agentId && c.answeredAt);
+      if (alreadyOnACall) {
+        conn.send({ type: 'answer-failed', callId, reason: 'already-on-a-call' });
         return;
       }
       removeFromQueue(callId);
@@ -1839,6 +1907,7 @@ async function main() {
   ADMIN_PASSWORD = await store.loadAdminPassword(ADMIN_PASSWORD);
   CONFIG = await store.loadConfig(CONFIG);
   callLog.push(...await store.loadCallLog());
+  missedCallLog.push(...await store.loadMissedCallLog());
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
   for (const r of await store.loadRatings()) ratings.set(r.callId, r);
 

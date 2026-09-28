@@ -567,6 +567,9 @@ async function loadOverview() {
 
 function renderOverviewTiles(t) {
   document.getElementById('ov-calls').textContent = t.calls;
+  const notAnsweredEl = document.getElementById('ov-not-answered');
+  notAnsweredEl.textContent = t.notAnswered ?? 0;
+  notAnsweredEl.classList.toggle('stat-value-warning', Boolean(t.notAnswered));
   document.getElementById('ov-avg-talk').textContent = formatDuration(t.avgTalkSeconds);
   document.getElementById('ov-total-talk').textContent = formatDuration(t.totalTalkSeconds);
   document.getElementById('ov-hold').textContent = t.totalHoldCount ? `${formatDuration(t.totalHoldSeconds)} (${t.totalHoldCount}×)` : '0:00';

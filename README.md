@@ -30,7 +30,15 @@ beyond this repo.
    with which kiosk they called from.
 2. Every signed-in agent's dashboard gets a live queue update over
    WebSocket and can claim the call ("Answer"). Only one agent can win a
-   given call — the server settles ties.
+   given call — the server settles ties. **The server also stops the same
+   agent from winning two calls at once**, even if they're signed in from
+   two places at the same time (a second tab, a phone and a desktop, etc.)
+   — agent passwords aren't tied to one device, so nothing stops someone
+   from being logged in twice, but a person can only actually be on one
+   video call at a time. The moment one of an agent's sessions is on an
+   active call, every other session signed in as that same agent gets a
+   clear "you're already on a call elsewhere" message if it tries to
+   answer another one, instead of silently double-booking them.
 3. Guest and agent browsers exchange a WebRTC offer/answer and ICE
    candidates, relayed through the server as small JSON messages over the
    same WebSocket. Once connected, video/audio flows **directly between
@@ -446,10 +454,22 @@ agent and kiosk, filterable by:
 - **Kiosk** — every kiosk that's ever logged a call.
 
 The filters scope everything below them at once — the stat tiles (calls,
-average and total talk time, hold time, average rating) and the **calls
-over time** chart, which you can switch between daily and monthly bars.
-Picking a wide date range with daily bars automatically switches to
-monthly instead, rather than rendering a chart with hundreds of slivers.
+**not answered**, average and total talk time, hold time, average rating)
+and the **calls over time** chart, which you can switch between daily and
+monthly bars. Picking a wide date range with daily bars automatically
+switches to monthly instead, rather than rendering a chart with hundreds
+of slivers.
+
+**Not answered** counts guests who called in but never got connected to an
+agent — they either gave up and tapped "Cancel" while waiting, or lost
+their connection (closed the tab, network dropped) before anyone picked
+up. It's tracked entirely separately from the "Calls" tile, which only
+ever counts calls an agent actually answered, so one number never leaks
+into the other. Since these calls never had an agent, filtering the
+Dashboard to one specific agent always shows **0** here — pick "All
+agents" (or filter by kiosk only) to see it. Like the rest of the
+Dashboard, it resets to the last 200 entries on a restart unless
+[persistent storage](#persistent-storage-agents--call-history) is set up.
 
 ### Agent Performance
 
@@ -542,10 +562,10 @@ below). That's fine for trying things out, but not for actually relying on
 it: a restart, a spin-down (free Render instances sleep after inactivity),
 or your next deploy wipes it clean.
 
-To make agents, the admin password, call history, guest ratings, and app
-config (the video call configuration under "Call hold" above)
-**permanent — surviving restarts and redeploys, with true all-time
-history** — connect a free
+To make agents, the admin password, call history (answered and
+not-answered), guest ratings, and app config (the video call configuration
+under "Call hold" above) **permanent — surviving restarts and redeploys,
+with true all-time history** — connect a free
 [Upstash](https://upstash.com) Redis database. It's a small cloud
 database reached over plain HTTPS, so no extra npm packages are needed, and
 it has a generous free tier that easily covers a single hotel's traffic.

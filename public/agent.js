@@ -220,7 +220,12 @@ function handleServerMessage(msg) {
       break;
 
     case 'answer-failed':
-      alert('That call was already answered by another agent.');
+      if (msg.reason === 'already-on-a-call') {
+        alert("You're already on a call in another session (another tab, phone, or browser signed in as you) — end that one before answering here.");
+      } else {
+        alert('That call was already answered by another agent.');
+      }
+      updateRingingState(); // this tab didn't actually answer — resume ringing if guests are still waiting
       break;
 
     case 'call-assigned':
@@ -237,6 +242,13 @@ function handleServerMessage(msg) {
 
     case 'call-log':
       renderCallLog(msg.entries);
+      break;
+
+    case 'call-log-changed':
+      // The shared "Recent calls" list changed because *some* call just
+      // ended — not necessarily one this agent was on, so this can arrive
+      // with no active call of our own in progress. Just re-fetch it.
+      wsSend({ type: 'get-log' });
       break;
 
     case 'call-hold':

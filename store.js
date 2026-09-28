@@ -31,6 +31,13 @@ const CALL_LOG_KEY = 'vfd:calllog';
 // A safety net, not a real limit — this is roughly 135 years of calls at
 // one a day. It exists only so a bug or abuse can't grow the list forever.
 const CALL_LOG_SAFETY_CAP = 50000;
+// A guest who called in but was never answered (gave up waiting, or lost
+// their connection before an agent picked up) — tracked separately from
+// CALL_LOG_KEY rather than mixed into it, since those entries have no
+// agent/answeredAt and would corrupt the duration/per-agent math that
+// assumes every call log entry was actually answered.
+const MISSED_CALL_LOG_KEY = 'vfd:missedcalls';
+const MISSED_CALL_LOG_SAFETY_CAP = 50000;
 
 // Updated by every Redis call; lets the admin dashboard show whether
 // persistence is actually working right now, not just whether it's set up.
@@ -181,6 +188,39 @@ async function appendCallLogEntry(entry) {
   } catch (err) {
     connected = false;
     console.error('[store] could not save a call log entry to Redis — it will only exist in memory until the next restart:', err.message);
+    return false;
+  }
+}
+
+/** Loads every persisted "never answered" call. Returns [] if not configured/unreachable — same convention as loadCallLog. */
+async function loadMissedCallLog() {
+  if (!configured) return [];
+  try {
+    const raw = await redisCommand(['LRANGE', MISSED_CALL_LOG_KEY, '0', '-1']);
+    connected = true;
+    return (raw || [])
+      .map((s) => {
+        try { return JSON.parse(s); } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load missed-call history from Redis, starting empty:', err.message);
+    return [];
+  }
+}
+
+/** Appends one never-answered call to the persisted history. Returns true if it was actually saved. */
+async function appendMissedCallEntry(entry) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['RPUSH', MISSED_CALL_LOG_KEY, JSON.stringify(entry)]);
+    await redisCommand(['LTRIM', MISSED_CALL_LOG_KEY, String(-MISSED_CALL_LOG_SAFETY_CAP), '-1']);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save a missed-call entry to Redis — it will only exist in memory until the next restart:', err.message);
     return false;
   }
 }
@@ -337,6 +377,8 @@ module.exports = {
   persistAdminPassword,
   loadCallLog,
   appendCallLogEntry,
+  loadMissedCallLog,
+  appendMissedCallEntry,
   loadChats,
   persistChat,
   loadConfig,
