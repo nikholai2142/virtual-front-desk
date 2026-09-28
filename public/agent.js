@@ -27,6 +27,7 @@ function showScreen(id) {
 let ws = null;
 let pc = null;
 let localStream = null;
+let remoteStream = null;
 let currentCallId = null;
 let currentTopic = null;
 let currentKioskId = null;
@@ -40,6 +41,7 @@ let chatConversations = new Map(); // conversationId -> conversation
 let selectedChatId = null;
 let connectTimeoutHandle = null;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
+let recording = null; // active call-recording session, see startRecording() below
 
 function beep() {
   try {
@@ -353,6 +355,12 @@ setInterval(() => {
   });
 }, 1000);
 
+function formatBytes(n) {
+  if (!n) return '';
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function renderCallLog(entries) {
   const box = document.getElementById('call-log');
   if (!entries.length) {
@@ -366,7 +374,10 @@ function renderCallLog(entries) {
     div.className = 'call-log-entry';
     const time = new Date(e.answeredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const kioskPart = e.kioskId ? ` · ${escapeHtml(e.kioskId)}` : '';
-    div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong>${kioskPart} · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}`;
+    const recordingPart = e.recording
+      ? `<div class="log-recording"><a href="${escapeHtml(e.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(e.recording.bytes)}</span></div>`
+      : '';
+    div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong>${kioskPart} · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}${recordingPart}`;
     box.appendChild(div);
   });
 }
@@ -392,7 +403,8 @@ async function startAsAnswerer() {
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
   pc.ontrack = (evt) => {
-    document.getElementById('remote-video').srcObject = evt.streams[0];
+    remoteStream = evt.streams[0];
+    document.getElementById('remote-video').srcObject = remoteStream;
   };
   pc.onicecandidate = (evt) => {
     if (evt.candidate) {
@@ -403,6 +415,7 @@ async function startAsAnswerer() {
     if (!pc) return;
     if (pc.connectionState === 'connected') {
       clearTimeout(connectTimeoutHandle);
+      startRecording(currentCallId);
     } else if (pc.connectionState === 'failed') {
       clearTimeout(connectTimeoutHandle);
       failConnection();
@@ -423,6 +436,136 @@ async function startAsAnswerer() {
     const s = Math.floor((Date.now() - callStartedAt) / 1000);
     document.getElementById('call-timer-label').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }, 1000);
+}
+
+// ---- Call recording -----------------------------------------------------
+// The server never sees a call's live audio/video (it's peer-to-peer, or
+// TURN-relayed without touching the server — see turn.js), so recording
+// happens here, client-side: draw the remote + local video onto a canvas
+// (remote full-frame, local as a small picture-in-picture, matching what's
+// on screen), mix both audio tracks through a Web Audio destination, and
+// feed the combined stream into MediaRecorder. Chunks are uploaded to the
+// server every couple of seconds as the call happens, so a crashed tab
+// loses at most a couple of seconds rather than the whole recording.
+
+/** Draws `videoEl` into the (x, y, w, h) box, letterboxed to preserve its aspect ratio. */
+function drawContain(ctx, videoEl, x, y, w, h) {
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  if (!vw || !vh) return;
+  const scale = Math.min(w / vw, h / vh);
+  const dw = vw * scale;
+  const dh = vh * scale;
+  ctx.drawImage(videoEl, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+
+function startRecording(callId) {
+  if (recording) return; // already recording this call
+  if (typeof MediaRecorder === 'undefined') {
+    console.warn('MediaRecorder is not supported in this browser — call will not be recorded.');
+    return;
+  }
+
+  try {
+    const remoteVideoEl = document.getElementById('remote-video');
+    const localVideoEl = document.getElementById('local-video');
+    const canvas = document.createElement('canvas');
+    canvas.width = 960;
+    canvas.height = 540;
+    const ctx = canvas.getContext('2d');
+
+    const rec = { callId, rafId: null, uploadChain: Promise.resolve(), seq: 0, mediaRecorder: null, audioCtx: null };
+    recording = rec;
+
+    const draw = () => {
+      ctx.fillStyle = '#111318';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      drawContain(ctx, remoteVideoEl, 0, 0, canvas.width, canvas.height);
+      const pipW = Math.round(canvas.width * 0.24);
+      const pipH = Math.round(pipW * 0.75);
+      drawContain(ctx, localVideoEl, canvas.width - pipW - 16, canvas.height - pipH - 16, pipW, pipH);
+      rec.rafId = requestAnimationFrame(draw);
+    };
+    draw();
+
+    const canvasStream = canvas.captureStream(25);
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    rec.audioCtx = audioCtx;
+    const dest = audioCtx.createMediaStreamDestination();
+    if (localStream && localStream.getAudioTracks().length) {
+      audioCtx.createMediaStreamSource(new MediaStream(localStream.getAudioTracks())).connect(dest);
+    }
+    if (remoteStream && remoteStream.getAudioTracks().length) {
+      audioCtx.createMediaStreamSource(new MediaStream(remoteStream.getAudioTracks())).connect(dest);
+    }
+
+    const mixedStream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+    const mimeType = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
+      .find((t) => MediaRecorder.isTypeSupported(t));
+    const mediaRecorder = new MediaRecorder(mixedStream, mimeType ? { mimeType } : undefined);
+    rec.mediaRecorder = mediaRecorder;
+    rec.mimeType = mediaRecorder.mimeType || mimeType || 'video/webm';
+
+    mediaRecorder.ondataavailable = (evt) => {
+      if (!evt.data || evt.data.size === 0) return;
+      const mySeq = rec.seq++;
+      const blob = evt.data;
+      rec.uploadChain = rec.uploadChain
+        .then(() => uploadRecordingChunk(rec.callId, mySeq, blob, rec.mimeType))
+        .catch((e) => console.warn('Recording chunk upload failed:', e));
+    };
+    mediaRecorder.start(2000); // 2s chunks — bounds memory and limits data lost to a crash mid-call
+
+    document.getElementById('recording-indicator')?.classList.remove('hidden');
+  } catch (err) {
+    console.warn('Could not start call recording (continuing without one):', err);
+    if (recording && recording.callId === callId) {
+      if (recording.rafId) cancelAnimationFrame(recording.rafId);
+      recording = null;
+    }
+  }
+}
+
+async function uploadRecordingChunk(callId, seq, blob, mimeType) {
+  await fetch(`/api/recordings/chunk?callId=${encodeURIComponent(callId)}&seq=${seq}`, {
+    method: 'POST',
+    headers: { 'Content-Type': mimeType || 'video/webm' },
+    body: blob,
+  });
+}
+
+/** Stops the active recording (if any) and uploads/finalizes it — fire-and-forget, called from endActiveCallUI(). */
+function stopRecording() {
+  if (!recording) return;
+  const rec = recording;
+  recording = null;
+  document.getElementById('recording-indicator')?.classList.add('hidden');
+  if (rec.rafId) cancelAnimationFrame(rec.rafId);
+
+  (async () => {
+    if (rec.mediaRecorder && rec.mediaRecorder.state !== 'inactive') {
+      await new Promise((resolve) => {
+        rec.mediaRecorder.addEventListener('stop', resolve, { once: true });
+        try { rec.mediaRecorder.stop(); } catch { resolve(); }
+      });
+    }
+    try { await rec.uploadChain; } catch { /* best-effort — a dropped chunk just means a shorter recording */ }
+    try { rec.audioCtx.close(); } catch { /* ignore */ }
+    try {
+      await fetch('/api/recordings/finish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: rec.callId }),
+      });
+      // The recording usually finishes uploading a moment after the call
+      // log entry itself was created, so refresh the log now that it's
+      // actually available to show a playback link for it.
+      wsSend({ type: 'get-log' });
+    } catch (err) {
+      console.warn('Could not finalize the call recording upload:', err);
+    }
+  })();
 }
 
 // See kiosk.js's handleSignal for why this buffer exists: the 'signal' WS
@@ -481,11 +624,13 @@ async function handleSignal(signalType, data) {
 }
 
 function endActiveCallUI() {
+  stopRecording(); // captures what it needs before pc/localStream are torn down below
   clearTimeout(connectTimeoutHandle);
   pendingIceCandidates = [];
   pendingSignals = [];
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+  remoteStream = null;
   clearInterval(callTimerHandle);
   callTimerHandle = null;
   currentCallId = null;

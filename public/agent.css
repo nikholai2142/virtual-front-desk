@@ -15,6 +15,9 @@ html, body {
   background: var(--bg); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+}
 .screen { display: none; }
 .screen.active { display: block; height: 100%; }
 
@@ -79,11 +82,12 @@ html, body {
 .topbar {
   height: 56px; display: flex; align-items: center; justify-content: space-between;
   padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+  gap: 12px; min-width: 0;
 }
-.topbar-left { display: flex; align-items: center; gap: 24px; }
-.logo { font-weight: 600; }
-.topbar-right { display: flex; align-items: center; gap: 8px; color: var(--sub); font-size: 14px; }
-.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--good); display: inline-block; }
+.topbar-left { display: flex; align-items: center; gap: 24px; min-width: 0; flex-shrink: 1; }
+.logo { font-weight: 600; white-space: nowrap; }
+.topbar-right { display: flex; align-items: center; gap: 8px; color: var(--sub); font-size: 14px; flex-shrink: 0; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--good); display: inline-block; flex-shrink: 0; }
 
 .view-tabs { display: flex; gap: 4px; }
 .view-tab {
@@ -131,6 +135,10 @@ html, body {
   font-size: 12px; color: var(--sub); padding: 8px 0; border-bottom: 1px solid var(--border);
 }
 .call-log-entry strong { color: var(--text); }
+.log-recording { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+.log-recording a { color: var(--good); text-decoration: none; font-weight: 600; }
+.log-recording a:hover { text-decoration: underline; }
+.log-recording .rec-size { color: var(--sub); font-size: 11px; }
 
 .call-panel { position: relative; padding: 20px; overflow-y: auto; }
 .no-call {
@@ -156,6 +164,12 @@ html, body {
 }
 .call-meta strong { margin-right: 10px; }
 #call-timer-label { color: var(--sub); }
+.recording-indicator {
+  margin-left: 10px; color: var(--danger); font-size: 12px; font-weight: 600;
+  animation: rec-pulse 1.6s ease-in-out infinite;
+}
+.recording-indicator.hidden { display: none; }
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .call-buttons { display: flex; gap: 10px; }
 .ctrl-btn {
   border: none; border-radius: 10px; padding: 10px 16px; cursor: pointer;
@@ -220,3 +234,74 @@ html, body {
 }
 .thread-reply-form button { width: auto; flex-shrink: 0; padding: 12px 20px; }
 #thread-send-error { margin: 8px 0 0; }
+
+/* ============================================================
+   Responsive — tablet & phone
+   ============================================================ */
+@media (max-width: 860px) {
+  .topbar { padding: 0 10px; }
+  .topbar-left { gap: 10px; }
+  .logo { font-size: 15px; }
+  .view-tabs { gap: 2px; }
+  .view-tab { padding: 7px 10px; font-size: 13px; gap: 4px; }
+  .topbar-right { gap: 6px; font-size: 12px; }
+  .btn-small { padding: 6px 10px; font-size: 12px; }
+  .icon-btn { width: 30px; height: 30px; }
+
+  /* Stack the sidebar above the main panel instead of a fixed 320px column,
+     which is what squeezed the video call area down to a sliver on phones. */
+  .layout.view.active {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 38vh) 1fr;
+    height: calc(100% - 56px);
+  }
+
+  .queue-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 12px;
+  }
+
+  .call-panel { padding: 12px; }
+
+  .video-stage { max-height: 38vh; }
+
+  #local-video { width: 96px; bottom: 10px; right: 10px; }
+
+  .call-meta { flex-direction: column; align-items: stretch; gap: 10px; }
+  .call-meta > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .call-buttons { flex-wrap: wrap; }
+  .call-buttons .ctrl-btn { flex: 1; min-width: 84px; }
+
+  .thread-header { padding-bottom: 10px; margin-bottom: 10px; }
+  .msg-bubble { max-width: 85%; }
+  .thread-reply-form { flex-wrap: wrap; }
+  .thread-reply-form textarea { min-width: 0; }
+}
+
+/* Once a call connects, give it the whole screen on mobile — there's
+   nothing else the agent needs to see mid-call, and the queue can only
+   ever hold guests waiting for the next call. Progressive enhancement:
+   browsers without :has() just keep the stacked layout above. */
+@media (max-width: 860px) {
+  #view-calls.layout.view.active:has(.active-call:not(.hidden)) {
+    grid-template-rows: 1fr;
+  }
+  #view-calls.layout.view.active:has(.active-call:not(.hidden)) .queue-panel {
+    display: none;
+  }
+  #view-calls.layout.view.active:has(.active-call:not(.hidden)) .video-stage {
+    max-height: 48vh;
+  }
+}
+
+@media (max-width: 480px) {
+  .logo-text { display: none; }
+  #agent-name-label { display: none; }
+  .call-buttons .ctrl-btn { min-width: 0; padding: 10px 8px; font-size: 13px; }
+}
+
+@media (max-width: 420px) {
+  .login-card { width: 90vw; max-width: 320px; padding: 28px 20px; }
+  .modal-card { padding: 20px; }
+}

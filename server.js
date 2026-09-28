@@ -17,6 +17,7 @@ const path = require('path');
 const store = require('./store');
 const chat = require('./chat');
 const turn = require('./turn');
+const r2 = require('./r2');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -576,6 +577,246 @@ async function handleTurnCredentials(req, res) {
 }
 
 // ======================================================================
+// Call recordings — this server never sees a call's live audio/video (it's
+// peer-to-peer, or TURN-relayed without ever touching this process — see
+// turn.js), so a recording has to be captured client-side, in the agent's
+// browser: it composites the remote + local video onto a canvas, mixes
+// both audio tracks, and runs that through MediaRecorder. The resulting
+// webm chunks get uploaded here as the call happens and staged to a local
+// file under recordings/ while the call is in progress — that staging
+// step happens either way, so a recording still exists locally even if
+// the next step (below) fails.
+//
+// Where a *finished* recording ends up depends on whether Cloudflare R2
+// is configured (see r2.js):
+//   - R2 configured: the staged file is uploaded to R2 as one object and
+//     the local copy is deleted — this is what actually persists across
+//     redeploys/restarts. See the README's "Call recordings" section for
+//     setup.
+//   - Not configured (the default): the file just stays on local disk,
+//     indexed in recordings/index.json — simple, no extra account needed,
+//     but NOT persistent on most Render plans, same caveat as
+//     agents.json without Redis configured.
+// An R2 upload failure at finish time falls back to keeping the local
+// copy rather than losing the recording.
+// ======================================================================
+
+const RECORDINGS_DIR = path.join(__dirname, 'recordings');
+try {
+  fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+} catch (err) {
+  console.error('[recordings] could not create the recordings/ directory:', err.message);
+}
+const RECORDINGS_INDEX_FILE = path.join(RECORDINGS_DIR, 'index.json');
+
+function loadRecordingsIndex() {
+  try {
+    return JSON.parse(fs.readFileSync(RECORDINGS_INDEX_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+/** [{ callId, backend: 'local'|'r2', filename?, key?, mimeType, bytes, startedAt, finishedAt }] — newest last. */
+let recordingsIndex = loadRecordingsIndex();
+
+function saveRecordingsIndex() {
+  try {
+    fs.writeFileSync(RECORDINGS_INDEX_FILE, JSON.stringify(recordingsIndex, null, 2));
+  } catch (err) {
+    console.error('[recordings] could not write recordings/index.json (non-fatal):', err.message);
+  }
+}
+
+// A presigned R2 URL has to carry an expiry, so it's never stored — it's
+// minted fresh every time a call log is requested. An hour is generous for
+// one viewing session without leaving a link usable long after.
+const RECORDING_URL_TTL_SECONDS = 60 * 60;
+
+/** Returns { url, bytes, mimeType } for a finished recording of this call, or null if there isn't one (yet, or ever). */
+function recordingForCall(callId) {
+  // Recordings finish uploading slightly after the call itself ends (the
+  // agent's browser has to flush the last chunk), so the most recent call
+  // in the log may briefly have no recording here yet.
+  const entry = recordingsIndex.find((r) => r.callId === callId);
+  if (!entry) return null;
+
+  if (entry.backend === 'r2') {
+    try {
+      return { url: r2.getPresignedUrl(entry.key, RECORDING_URL_TTL_SECONDS), bytes: entry.bytes, mimeType: entry.mimeType };
+    } catch (err) {
+      console.error('[recordings] could not mint an R2 playback URL:', err.message);
+      return null;
+    }
+  }
+  return {
+    url: `/api/recordings/file/${encodeURIComponent(entry.filename)}`,
+    bytes: entry.bytes,
+    mimeType: entry.mimeType,
+  };
+}
+
+// callId -> { stream, filename, mimeType, bytes, startedAt } — recordings
+// currently being uploaded in chunks, one at a time per call.
+const activeRecordings = new Map();
+// A generous per-call safety cap, not a real limit — a hotel front-desk
+// call running this long would be very unusual, but an open-ended upload
+// endpoint shouldn't be able to fill the disk.
+const MAX_RECORDING_BYTES = 750 * 1024 * 1024;
+
+function safeRecordingFilename(callId) {
+  const safeId = String(callId).replace(/[^0-9]/g, '') || '0';
+  return `call-${safeId}-${Date.now()}.webm`;
+}
+
+async function handleRecordingChunk(req, res, urlObj) {
+  const callId = Number(urlObj.searchParams.get('callId'));
+  if (!Number.isInteger(callId) || callId <= 0) {
+    sendJson(res, 400, { error: 'invalid or missing callId' });
+    return;
+  }
+
+  let rec = activeRecordings.get(callId);
+  if (!rec) {
+    const filename = safeRecordingFilename(callId);
+    rec = {
+      filename,
+      mimeType: (req.headers['content-type'] || 'video/webm').split(';')[0].trim() || 'video/webm',
+      bytes: 0,
+      startedAt: Date.now(),
+      stream: fs.createWriteStream(path.join(RECORDINGS_DIR, filename)),
+    };
+    activeRecordings.set(callId, rec);
+  }
+
+  const chunks = [];
+  let total = 0;
+  let tooLarge = false;
+  await new Promise((resolve) => {
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (rec.bytes + total > MAX_RECORDING_BYTES) {
+        tooLarge = true;
+        req.destroy();
+        resolve();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', resolve);
+    req.on('error', resolve);
+  });
+
+  if (tooLarge) {
+    sendJson(res, 413, { error: 'recording too large' });
+    return;
+  }
+
+  const buf = Buffer.concat(chunks);
+  if (buf.length) {
+    rec.bytes += buf.length;
+    rec.stream.write(buf);
+  }
+  sendJson(res, 200, { ok: true, bytes: rec.bytes });
+}
+
+async function handleRecordingFinish(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+  const callId = Number(body.callId);
+  const rec = activeRecordings.get(callId);
+  if (!rec) {
+    // Nothing was ever uploaded for this call (e.g. it never actually
+    // connected) — not an error, just nothing to finalize.
+    sendJson(res, 200, { ok: true, recorded: false });
+    return;
+  }
+  activeRecordings.delete(callId);
+  await new Promise((resolve) => rec.stream.end(resolve));
+
+  if (rec.bytes === 0) {
+    // Nothing was actually captured — remove the empty file rather than
+    // leaving clutter in recordings/.
+    fs.unlink(path.join(RECORDINGS_DIR, rec.filename), () => {});
+    sendJson(res, 200, { ok: true, recorded: false });
+    return;
+  }
+
+  const localPath = path.join(RECORDINGS_DIR, rec.filename);
+
+  if (r2.configured) {
+    try {
+      // The whole call was already staged to local disk above as it came
+      // in (that write-through gives us a recording even if this upload
+      // fails); a front-desk call is short enough that reading it back
+      // into memory for one PutObject is cheap — no need for S3 multipart
+      // upload, whose 5MB-per-part minimum doesn't fit these 2-second
+      // chunks anyway.
+      const buffer = await fs.promises.readFile(localPath);
+      const key = `recordings/${rec.filename}`;
+      await r2.putObject(key, buffer, rec.mimeType);
+      fs.unlink(localPath, () => {}); // uploaded — the local copy was only a staging buffer
+      recordingsIndex.push({
+        callId, key, mimeType: rec.mimeType, bytes: rec.bytes,
+        startedAt: rec.startedAt, finishedAt: Date.now(), backend: 'r2',
+      });
+      saveRecordingsIndex();
+      sendJson(res, 200, { ok: true, recorded: true, backend: 'r2' });
+      return;
+    } catch (err) {
+      console.error('[recordings] R2 upload failed, keeping this one on local disk instead:', err.message);
+      // Fall through — the file is already sitting on local disk from the
+      // chunked writes above, so index it there rather than losing it.
+    }
+  }
+
+  recordingsIndex.push({
+    callId, filename: rec.filename, mimeType: rec.mimeType, bytes: rec.bytes,
+    startedAt: rec.startedAt, finishedAt: Date.now(), backend: 'local',
+  });
+  saveRecordingsIndex();
+  sendJson(res, 200, { ok: true, recorded: true, backend: 'local' });
+}
+
+/** Serves a recording file with Range support, so the <video> player in the dashboards can seek. */
+function handleRecordingFile(req, res, rawFilename) {
+  let filename;
+  try { filename = decodeURIComponent(rawFilename); } catch { res.writeHead(400).end('bad request'); return; }
+  if (!filename || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+    res.writeHead(400).end('bad request');
+    return;
+  }
+  const filePath = path.join(RECORDINGS_DIR, filename);
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) { res.writeHead(404).end('not found'); return; }
+
+    const range = req.headers.range;
+    if (range) {
+      const match = /bytes=(\d*)-(\d*)/.exec(range);
+      const start = match && match[1] ? parseInt(match[1], 10) : 0;
+      const end = match && match[2] ? parseInt(match[2], 10) : stat.size - 1;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || end >= stat.size) {
+        res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` }).end();
+        return;
+      }
+      res.writeHead(206, {
+        'Content-Type': 'video/webm',
+        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': end - start + 1,
+      });
+      fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Type': 'video/webm',
+        'Accept-Ranges': 'bytes',
+        'Content-Length': stat.size,
+      });
+      fs.createReadStream(filePath).pipe(res);
+    }
+  });
+}
+
+// ======================================================================
 // Webhooks — Meta calls these when a guest sends a WhatsApp or Messenger
 // message. See chat.js for the API calls and payload parsing; this just
 // wires HTTP routing + the one-time verification handshake.
@@ -896,7 +1137,8 @@ function handleAgentConnection(conn) {
     }
 
     if (msg.type === 'get-log') {
-      conn.send({ type: 'call-log', entries: callLog.slice(-50).reverse() });
+      const entries = callLog.slice(-50).reverse().map((e) => ({ ...e, recording: recordingForCall(e.callId) }));
+      conn.send({ type: 'call-log', entries });
       return;
     }
 
@@ -979,6 +1221,25 @@ const server = http.createServer((req, res) => {
       console.error('[password-reset] unhandled error:', err);
       sendJson(res, 500, { error: 'internal error' });
     });
+    return;
+  }
+  if (urlObj.pathname === '/api/recordings/chunk' && req.method === 'POST') {
+    handleRecordingChunk(req, res, urlObj).catch((err) => {
+      console.error('[recordings] chunk upload error:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    });
+    return;
+  }
+  if (urlObj.pathname === '/api/recordings/finish' && req.method === 'POST') {
+    handleRecordingFinish(req, res).catch((err) => {
+      console.error('[recordings] finish error:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    });
+    return;
+  }
+  const recordingFileMatch = urlObj.pathname.match(/^\/api\/recordings\/file\/([^/]+)$/);
+  if (recordingFileMatch && req.method === 'GET') {
+    handleRecordingFile(req, res, recordingFileMatch[1]);
     return;
   }
   if (urlObj.pathname === '/webhooks/whatsapp') {
@@ -1090,6 +1351,12 @@ async function main() {
     console.log('[turn] Cloudflare TURN configured — calls will use it to connect across networks that block direct peer-to-peer.');
   } else {
     console.log('[turn] CLOUDFLARE_TURN_KEY_ID / CLOUDFLARE_TURN_API_TOKEN not set — calls fall back to STUN-only, which cannot relay across networks that block direct connections (see README\'s "Video call relay" section).');
+  }
+
+  if (r2.configured) {
+    console.log('[recordings] Cloudflare R2 configured — call recordings will be uploaded there and persist across restarts/redeploys.');
+  } else {
+    console.log('[recordings] R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET not set — recordings stay on local disk only, which most Render plans wipe on redeploy/restart (see README\'s "Call recordings" section).');
   }
 
   if (chat.whatsappConfigured || chat.messengerConfigured) {

@@ -155,6 +155,101 @@ guest traffic.
 No code changes needed beyond what's already in this update — the two
 env vars are the only thing that turns it on.
 
+## Call recordings
+
+Every call is recorded automatically, from the agent's side. This app
+never has the actual audio/video pass through the server (it's
+peer-to-peer, or TURN-relayed without touching the server — see above),
+so recording happens in the agent's browser: it composites the remote and
+local video onto a canvas (the same picture-in-picture layout shown on
+screen), mixes both audio tracks, and uploads the result to the server in
+a couple of seconds' worth of chunks at a time as the call happens.
+
+- A **🔴 REC** indicator shows on the agent's active-call panel while a
+  call is being recorded, and guests see a **"this call may be
+  recorded"** notice on the kiosk's in-call screen.
+- Once a call ends, its entry in the agent dashboard's "Recent calls" list
+  gets a **▶ Play recording** link (may take a couple of seconds to
+  appear — the last few seconds of video have to finish uploading first).
+- Recordings are `.webm` files (video + audio) saved under `recordings/`
+  next to `server.js`, indexed in `recordings/index.json`.
+
+### Storage — local disk by default, Cloudflare R2 for real persistence
+
+Without any setup, recordings are stored **on local disk** under
+`recordings/` next to `server.js`. That's simple and needs no extra
+account, but it comes with the same caveat as `agents.json` without Redis
+configured: **on most Render plans, local disk is wiped on every
+redeploy and restart.** Recordings pile up while the service stays up,
+then disappear the next time it restarts — fine for trying this out, not
+fine if you need real guest recordings to survive.
+
+This project uses **Cloudflare R2** (S3-compatible object storage) to fix
+that — called from a small client (`r2.js`) that signs requests itself
+with AWS Signature V4 using nothing but Node's built-in `crypto`, the
+same zero-dependency approach as `turn.js`. Its free tier (10GB storage,
+no egress fees) comfortably covers a single hotel's call recordings.
+
+**How it behaves once configured:** each call still stages to local disk
+first as it happens (so a recording exists even if the next step hiccups),
+then on call end the finished file is uploaded to R2 as one object and the
+local copy is deleted. Playback links are short-lived (1 hour) presigned
+URLs straight to R2, minted fresh each time the call log loads — the file
+itself never passes back through this server. If the R2 upload fails for
+any reason (bad credentials, a network blip), the recording is **not
+lost** — it just stays on local disk instead, same as if R2 weren't
+configured at all.
+
+### Setup
+
+1. Go to the [Cloudflare dashboard](https://dash.cloudflare.com) → **R2
+   Object Storage** (same account as the TURN setup above, if you did
+   that) → **Create bucket**. Give it any name, e.g. `vfd-recordings`.
+2. Go to **R2** → **Manage API tokens** → **Create API token**. Give it
+   **Object Read & Write** permission, scoped to just this bucket if you
+   want to be strict about it. This gives you an **Access Key ID** and a
+   **Secret Access Key** — copy both (the secret is only shown once).
+3. You'll also need your **Account ID**, shown on the right side of the
+   R2 overview page (or in the S3 API endpoint Cloudflare shows you,
+   which looks like `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`).
+4. In Render, your service → **Environment**, add:
+
+   | Variable | Value |
+   |---|---|
+   | `R2_ACCOUNT_ID` | your Cloudflare Account ID |
+   | `R2_ACCESS_KEY_ID` | the Access Key ID from step 2 |
+   | `R2_SECRET_ACCESS_KEY` | the Secret Access Key from step 2 |
+   | `R2_BUCKET` | the bucket name from step 1 |
+
+5. Save, let Render redeploy, and upload `r2.js` (new file) to GitHub
+   alongside `server.js` if you haven't already.
+6. Open `/agent`, sign in, and check the Render logs for `[recordings]
+   Cloudflare R2 configured` at startup to confirm it's active.
+
+No code changes needed — the four env vars are the only thing that turns
+it on.
+
+If you'd rather not use R2, adding a **Render persistent disk** to your
+service (Render → your service → **Disks**) mounted at `recordings/` is
+the other option — cheaper conceptually, no external account, but ties
+your recordings to this one Render service rather than portable object
+storage.
+
+There's also a generous but real safety cap: a single call's recording
+stops accepting new data past **750MB** (`MAX_RECORDING_BYTES` in
+`server.js`), far beyond any real front-desk call, just so a stuck upload
+can't fill the disk (or run up an R2 bill).
+
+### A note on consent
+
+Recording laws vary a lot by place — some require only one party to
+consent, others require everyone on the call to. This app shows an
+on-screen notice to the guest and an indicator to the agent so recording
+is never silent, but **it's on you** (the hotel) to make sure recording
+every call this way is actually compliant where you operate — check with
+whoever handles that for your property before turning this on for real
+guest calls.
+
 ## Admin dashboard
 
 Open `/admin` and sign in with the admin password (default `letmein`,
@@ -242,7 +337,10 @@ free [Upstash](https://upstash.com) Redis database. It's a small cloud
 database reached over plain HTTPS, so no extra npm packages are needed, and
 it has a generous free tier that easily covers a single hotel's traffic.
 (Password reset *requests* are the one exception — see "Password resets"
-above — those stay in-memory even with Redis configured, by design.)
+above — those stay in-memory even with Redis configured, by design. Call
+*recordings* are a separate exception too — this Redis setup doesn't
+cover them either way; they use their own Cloudflare R2 setup instead,
+see "Call recordings" below.)
 
 **1. Create a free Upstash account and database**
 
@@ -453,9 +551,13 @@ in a real lobby:
   default. Agents and call *history* are a separate concern — see
   "Persistent storage" above — and do survive restarts once Redis is
   connected.
-- **No recording, transcripts, or PMS integration.** Calls are pure
-  peer-to-peer video; the call log only stores topic, agent, duration and
-  notes, nothing from the video/audio itself.
+- **Recordings need R2 configured (or a persistent disk) to actually
+  persist.** See "Call recordings" above — without `R2_ACCOUNT_ID` /
+  `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` set,
+  recordings stay on local disk, which most Render plans wipe on every
+  redeploy/restart. There's also no transcript or PMS integration — just
+  the video/audio file itself plus topic/agent/duration/notes in the call
+  log.
 - **No multi-device ringing / overflow routing.** Any signed-in agent can
   answer any waiting call; there's no skill-based routing, no
   "ring all agents then escalate," and no SMS/callback fallback if no
@@ -474,8 +576,10 @@ virtual-front-desk/
 ├── store.js        Persistence layer: Upstash Redis if configured, else local-only fallback
 ├── chat.js         WhatsApp/Messenger: Graph API sending, webhook signature check + parsing
 ├── turn.js         Cloudflare TURN: mints short-lived WebRTC relay credentials per call
+├── r2.js           Cloudflare R2: signs S3-compatible requests to upload/serve call recordings
 ├── agents.json     Seed/fallback agent passwords/names — real source of truth is Redis once configured
 ├── admin.json      Admin dashboard password (default "letmein" — change this)
+├── recordings/     Call recordings (.webm) + index.json — local staging always, final home unless R2 is configured (see "Call recordings")
 ├── package.json
 └── public/
     ├── kiosk.html / kiosk.css / kiosk.js   Guest-facing lobby screen

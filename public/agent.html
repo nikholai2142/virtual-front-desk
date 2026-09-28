@@ -33,7 +33,7 @@
   <section id="screen-dashboard" class="screen">
     <header class="topbar">
       <div class="topbar-left">
-        <span class="logo">🛎️ Virtual Front Desk</span>
+        <span class="logo">🛎️ <span class="logo-text">Virtual Front Desk</span></span>
         <div class="view-tabs">
           <button id="tab-calls" class="view-tab active" data-view="calls">📹 Calls</button>
           <button id="tab-chats" class="view-tab" data-view="chats">
@@ -77,6 +77,7 @@
             <div>
               <strong id="call-topic-label">—</strong>
               <span id="call-timer-label">0:00</span>
+              <span id="recording-indicator" class="recording-indicator hidden" title="This call is being recorded">🔴 REC</span>
             </div>
             <div class="call-buttons">
               <button id="btn-toggle-mic" class="ctrl-btn" title="Mute/unmute">🎤</button>
