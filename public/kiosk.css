@@ -175,3 +175,68 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 }
 .ctrl-btn.off { background: rgba(255,255,255,0.35); }
 .ctrl-end { background: var(--danger); }
+
+/* ---- Post-call rating (screen-ended) ---- */
+.rating-prompt {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+.rating-question {
+  font-size: 18px;
+  color: var(--text);
+  margin: 0 0 16px;
+}
+.star-rating {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.star-btn {
+  background: none;
+  border: none;
+  font-size: 48px;
+  line-height: 1;
+  color: #2a3a5c;
+  cursor: pointer;
+  padding: 4px;
+  transition: color .12s ease, transform .12s ease;
+}
+.star-btn:active { transform: scale(0.9); }
+.star-btn.selected { color: #f6c76a; }
+.rating-details {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+.rating-details input,
+.rating-details textarea {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 16px;
+  border-radius: 14px;
+  border: 1px solid #223255;
+  background: var(--panel);
+  color: var(--text);
+  font-family: inherit;
+  resize: none;
+}
+.rating-details .btn { width: 100%; margin-top: 4px; }
+.rating-skip { margin-top: 16px; font-size: 14px; }
+
+/* On-hold overlay — shown while the agent has this call on hold */
+.hold-overlay {
+  position: absolute; inset: 0; z-index: 5;
+  background: rgba(9, 13, 24, 0.92);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 40px;
+}
+.hold-overlay.hidden { display: none; }
+.hold-overlay-icon { font-size: 56px; margin-bottom: 4px; }
+.hold-overlay h2 { margin: 8px 0 4px; }
+.hold-overlay .sub { margin: 0; max-width: 420px; }

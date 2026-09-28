@@ -236,6 +236,97 @@ async function persistChat(conversation) {
   }
 }
 
+// ---- App config (video call configuration, etc.) --------------------------
+// Same seed/fallback pattern as the admin password: a single JSON blob,
+// Redis is the durable copy when configured, a local config.json is the
+// seed/fallback otherwise.
+
+const CONFIG_KEY = 'vfd:config';
+
+/**
+ * Loads the app config from Redis. On a brand-new Redis database there's
+ * nothing there yet, so it seeds Redis from `fallbackConfig` (the local
+ * config.json / defaults) and returns that. If Redis isn't configured or
+ * isn't reachable, just returns `fallbackConfig` unchanged.
+ */
+async function loadConfig(fallbackConfig) {
+  if (!configured) return fallbackConfig;
+  try {
+    const raw = await redisCommand(['GET', CONFIG_KEY]);
+    connected = true;
+    if (raw) return { ...fallbackConfig, ...JSON.parse(raw) };
+    await redisCommand(['SET', CONFIG_KEY, JSON.stringify(fallbackConfig)]);
+    return fallbackConfig;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load app config from Redis, using the local fallback instead:', err.message);
+    return fallbackConfig;
+  }
+}
+
+/** Returns true if the config was actually saved to Redis, false otherwise (including "not configured"). */
+async function persistConfig(config) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', CONFIG_KEY, JSON.stringify(config)]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save app config to Redis — this change may be lost on the next restart/redeploy:', err.message);
+    return false;
+  }
+}
+
+// ---- Call ratings (post-call guest feedback) -------------------------------
+// Same shape as chat conversations above: one key per rating plus a set of
+// ids, rather than a single hash — see the comment on loadChats() for why
+// (HGETALL's response shape varies too much across REST wrappers to rely on).
+
+const RATING_IDS_KEY = 'vfd:rating:ids';
+function ratingKey(callId) {
+  return `vfd:rating:${callId}`;
+}
+
+/** Loads every persisted call rating. Returns [] if not configured/unreachable. */
+async function loadRatings() {
+  if (!configured) return [];
+  try {
+    const ids = await redisCommand(['SMEMBERS', RATING_IDS_KEY]);
+    connected = true;
+    if (!ids || !ids.length) return [];
+    const ratings = [];
+    for (const id of ids) {
+      try {
+        const raw = await redisCommand(['GET', ratingKey(id)]);
+        if (raw) ratings.push(JSON.parse(raw));
+      } catch (err) {
+        console.error(`[store] could not load rating for call ${id}, skipping it:`, err.message);
+      }
+    }
+    return ratings;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load call ratings from Redis, starting empty:', err.message);
+    return [];
+  }
+}
+
+/** Saves one call's rating. Returns true if it actually reached Redis. */
+async function persistRating(rating) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', ratingKey(rating.callId), JSON.stringify(rating)]);
+    await redisCommand(['SADD', RATING_IDS_KEY, String(rating.callId)]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save a call rating to Redis — it may be lost on the next restart:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   configured,
   checkConnection,
@@ -248,4 +339,8 @@ module.exports = {
   appendCallLogEntry,
   loadChats,
   persistChat,
+  loadConfig,
+  persistConfig,
+  loadRatings,
+  persistRating,
 };

@@ -51,7 +51,9 @@
 
     <main id="view-calls" class="layout view active">
       <aside class="queue-panel">
-        <h2>Waiting <span id="queue-count" class="count-badge">0</span></h2>
+        <h2>Waiting <span id="queue-count" class="count-badge">0</span>
+          <button id="btn-toggle-ring" class="ring-toggle-btn" type="button" title="Mute ring tone">🔔</button>
+        </h2>
         <div id="queue-list" class="queue-list">
           <p class="empty-note">No guests waiting.</p>
         </div>
@@ -72,16 +74,23 @@
           <div class="video-stage">
             <video id="remote-video" autoplay playsinline></video>
             <video id="local-video" autoplay playsinline muted></video>
+            <div id="hold-overlay" class="hold-overlay hidden">
+              <div class="hold-overlay-icon">⏸</div>
+              <div class="hold-overlay-title">Call on hold</div>
+              <div id="hold-countdown" class="hold-countdown">—</div>
+            </div>
           </div>
           <div class="call-meta">
             <div>
               <strong id="call-topic-label">—</strong>
               <span id="call-timer-label">0:00</span>
               <span id="recording-indicator" class="recording-indicator hidden" title="This call is being recorded">🔴 REC</span>
+              <span id="hold-badge" class="hold-badge hidden">⏸ ON HOLD</span>
             </div>
             <div class="call-buttons">
               <button id="btn-toggle-mic" class="ctrl-btn" title="Mute/unmute">🎤</button>
               <button id="btn-toggle-cam" class="ctrl-btn" title="Camera on/off">📷</button>
+              <button id="btn-toggle-hold" class="ctrl-btn" title="Put call on hold">⏸ Hold</button>
               <button id="btn-end-call" class="ctrl-btn ctrl-end" title="End call">End Call</button>
             </div>
           </div>

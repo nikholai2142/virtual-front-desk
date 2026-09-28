@@ -19,6 +19,11 @@ async function getIceServers() {
 
 const WAIT_WARNING_MS = 60 * 1000;
 const IDLE_RESET_MS = 4000;
+// The rating prompt gets much longer than a plain "call ended" screen, since
+// a guest needs time to tap stars and type optional remarks. If they never
+// interact, this is the fallback that still returns the kiosk to idle.
+const RATING_AUTO_RESET_MS = 45 * 1000;
+const RATING_THANKS_RESET_MS = 3000;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // if WebRTC never reaches "connected" in this window
                                         // (most commonly: no TURN server and the network
                                         // blocks direct peer-to-peer), fail loudly instead
@@ -70,6 +75,12 @@ let micOn = true;
 let camOn = true;
 let connectTimeoutHandle = null;
 
+// ---- Post-call rating ----
+let currentCallId = null;
+let currentAgentName = null;
+let selectedStars = 0;
+let endedResetHandle = null;
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws?role=guest`);
@@ -101,6 +112,7 @@ function wsSend(obj) {
 async function handleServerMessage(msg) {
   switch (msg.type) {
     case 'queued':
+      currentCallId = msg.callId;
       showScreen('screen-waiting');
       document.getElementById('waiting-topic').textContent = currentTopic;
       waitStartedAt = Date.now();
@@ -108,6 +120,7 @@ async function handleServerMessage(msg) {
       break;
 
     case 'call-accepted':
+      currentAgentName = msg.agentName;
       document.getElementById('call-agent-name').textContent = `${msg.agentName} · ${currentTopic}`;
       stopWaitTimer();
       await startPeerConnection();
@@ -120,6 +133,14 @@ async function handleServerMessage(msg) {
       await handleSignal(msg.signalType, msg.data);
       break;
 
+    case 'call-hold':
+      document.getElementById('hold-overlay').classList.remove('hidden');
+      break;
+
+    case 'call-resumed':
+      document.getElementById('hold-overlay').classList.add('hidden');
+      break;
+
     case 'call-ended':
       const reasonText = {
         'agent-ended': 'The agent ended the call.',
@@ -127,10 +148,77 @@ async function handleServerMessage(msg) {
       }[msg.reason] || 'We hope we could help. Have a great stay.';
       document.getElementById('ended-message').textContent = reasonText;
       cleanupCall();
-      showScreen('screen-ended');
-      setTimeout(resetToIdle, IDLE_RESET_MS);
+      showEndedScreen();
       break;
   }
+}
+
+// ---- Post-call rating -----------------------------------------------------
+// Shown on the "ended" screen whenever this call actually connected (we have
+// a callId from the 'queued' message). A guest who cancels before connecting
+// never sees it — there's no completed call to rate.
+function showEndedScreen() {
+  clearTimeout(endedResetHandle);
+  showScreen('screen-ended');
+  if (currentCallId) {
+    showRatingPrompt();
+    endedResetHandle = setTimeout(finishEndedScreen, RATING_AUTO_RESET_MS);
+  } else {
+    document.getElementById('rating-prompt').classList.add('hidden');
+    document.getElementById('rating-thanks').classList.add('hidden');
+    endedResetHandle = setTimeout(finishEndedScreen, IDLE_RESET_MS);
+  }
+}
+
+function finishEndedScreen() {
+  clearTimeout(endedResetHandle);
+  endedResetHandle = null;
+  currentCallId = null;
+  currentAgentName = null;
+  resetToIdle();
+}
+
+function showRatingPrompt() {
+  selectedStars = 0;
+  document.getElementById('rating-prompt').classList.remove('hidden');
+  document.getElementById('rating-thanks').classList.add('hidden');
+  document.getElementById('rating-details').classList.add('hidden');
+  document.getElementById('rating-name').value = '';
+  document.getElementById('rating-remarks').value = '';
+  document.getElementById('rating-question').textContent = currentAgentName
+    ? `How was your call with ${currentAgentName}?`
+    : 'How was your call?';
+  updateStarDisplay(0);
+}
+
+function updateStarDisplay(stars) {
+  document.querySelectorAll('.star-btn').forEach((btn) => {
+    btn.classList.toggle('selected', Number(btn.dataset.star) <= stars);
+  });
+}
+
+async function submitRating() {
+  const callId = currentCallId;
+  const btn = document.getElementById('btn-submit-rating');
+  btn.disabled = true;
+  try {
+    await fetch('/api/ratings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callId,
+        stars: selectedStars,
+        guestName: document.getElementById('rating-name').value,
+        remarks: document.getElementById('rating-remarks').value,
+      }),
+    });
+  } catch (err) {
+    console.warn('Could not submit rating:', err);
+  }
+  document.getElementById('rating-prompt').classList.add('hidden');
+  document.getElementById('rating-thanks').classList.remove('hidden');
+  clearTimeout(endedResetHandle);
+  endedResetHandle = setTimeout(finishEndedScreen, RATING_THANKS_RESET_MS);
 }
 
 // ICE candidates can arrive (via the 'signal' WS message handler above,
@@ -268,6 +356,7 @@ function cleanupCall() {
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   micOn = true; camOn = true;
+  document.getElementById('hold-overlay').classList.add('hidden');
 }
 
 function showError(title, message) {
@@ -311,9 +400,14 @@ document.getElementById('btn-cancel-waiting').addEventListener('click', () => {
 });
 
 document.getElementById('btn-hangup').addEventListener('click', () => {
+  // The guest hung up on a call that had actually connected (this button
+  // only exists on the in-call screen) — that's still a completed call
+  // worth rating, so route through the same ended/rating flow as a call
+  // the agent ended, instead of jumping straight back to idle.
   wsSend({ type: 'hangup' });
   cleanupCall();
-  resetToIdle();
+  document.getElementById('ended-message').textContent = 'We hope we could help. Have a great stay.';
+  showEndedScreen();
 });
 
 document.getElementById('btn-error-retry').addEventListener('click', resetToIdle);
@@ -329,6 +423,23 @@ document.getElementById('btn-toggle-cam').addEventListener('click', (e) => {
   camOn = !camOn;
   if (localStream) localStream.getVideoTracks().forEach((t) => (t.enabled = camOn));
   e.currentTarget.classList.toggle('off', !camOn);
+});
+
+document.querySelectorAll('.star-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    selectedStars = Number(btn.dataset.star);
+    updateStarDisplay(selectedStars);
+    document.getElementById('rating-details').classList.remove('hidden');
+  });
+});
+
+document.getElementById('btn-submit-rating').addEventListener('click', () => {
+  if (selectedStars < 1) return;
+  submitRating();
+});
+
+document.getElementById('btn-skip-rating').addEventListener('click', () => {
+  finishEndedScreen();
 });
 
 if (kioskId) {

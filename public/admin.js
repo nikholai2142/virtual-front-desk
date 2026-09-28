@@ -22,6 +22,12 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/** Renders a 1-5 star rating as filled/empty star glyphs, e.g. "★★★★☆". */
+function starGlyphs(stars) {
+  const n = Math.max(0, Math.min(5, Math.round(stars)));
+  return '★'.repeat(n) + '☆'.repeat(5 - n);
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -101,6 +107,7 @@ document.getElementById('btn-sign-out').addEventListener('click', () => {
 
 function startDashboard() {
   refreshAll();
+  loadHoldConfig();
   clearInterval(refreshHandle);
   refreshHandle = setInterval(refreshAll, REFRESH_INTERVAL_MS);
 }
@@ -247,6 +254,12 @@ function renderStats(data) {
     const row = document.createElement('div');
     row.className = 'stats-row';
     const lastCall = s.lastCallAt ? new Date(s.lastCallAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'never';
+    const holdPart = s.totalHoldCount
+      ? ` · <span class="stats-hold">on hold ${formatDuration(s.totalHoldSeconds)} (${s.totalHoldCount}×)</span>`
+      : '';
+    const ratingPart = s.ratingCount
+      ? ` · <span class="stats-rating">${starGlyphs(s.avgRating)} ${s.avgRating.toFixed(1)} (${s.ratingCount})</span>`
+      : '';
     row.innerHTML = `
       <div class="stats-row-top">
         <span class="name">${escapeHtml(s.agentName)}</span>
@@ -255,12 +268,131 @@ function renderStats(data) {
       <div class="stats-bar-track"><div class="stats-bar-fill" style="width:${pct}%"></div></div>
       <div class="stats-detail">
         avg ${formatDuration(s.avgTalkSeconds)} · total ${formatDuration(s.totalTalkSeconds)}
-        ${s.topKiosk ? ` · mostly ${escapeHtml(s.topKiosk)}` : ''} · last call ${lastCall}
+        ${s.topKiosk ? ` · mostly ${escapeHtml(s.topKiosk)}` : ''} · last call ${lastCall}${holdPart}${ratingPart}
       </div>
     `;
+    if (s.agentId) {
+      row.title = 'Click for full call history';
+      row.addEventListener('click', () => openAgentDetail(s.agentId));
+    } else {
+      row.style.cursor = 'default';
+      row.title = 'This agent has been removed — no detail view available';
+    }
     table.appendChild(row);
   });
 }
+
+// ---- Agent detail (full call history + recordings) ----
+
+async function openAgentDetail(agentId) {
+  const modal = document.getElementById('agent-detail-modal');
+  document.getElementById('agent-detail-name').textContent = 'Loading…';
+  document.getElementById('agent-detail-totals').innerHTML = '';
+  document.getElementById('agent-detail-calls').innerHTML = '';
+  modal.classList.remove('hidden');
+  try {
+    const data = await api(`/api/admin/agents/${encodeURIComponent(agentId)}/detail`);
+    renderAgentDetail(data);
+  } catch (err) {
+    document.getElementById('agent-detail-name').textContent = 'Could not load';
+    document.getElementById('agent-detail-calls').innerHTML = `<p class="empty-note">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderAgentDetail(data) {
+  document.getElementById('agent-detail-name').textContent = data.agent.name;
+
+  const t = data.totals;
+  const totalsEl = document.getElementById('agent-detail-totals');
+  totalsEl.innerHTML = `
+    <span><strong>${t.calls}</strong> call${t.calls === 1 ? '' : 's'}</span>
+    <span>avg <strong>${formatDuration(t.avgTalkSeconds)}</strong></span>
+    <span>total talk <strong>${formatDuration(t.totalTalkSeconds)}</strong></span>
+    <span>hold time <strong>${formatDuration(t.totalHoldSeconds)}</strong>${t.totalHoldCount ? ` (${t.totalHoldCount}×)` : ''}</span>
+    ${t.topKiosk ? `<span>mostly <strong>${escapeHtml(t.topKiosk)}</strong></span>` : ''}
+    <span>rating ${t.ratingCount ? `<strong>${starGlyphs(t.avgRating)} ${t.avgRating.toFixed(1)}</strong> (${t.ratingCount})` : '<strong>no ratings yet</strong>'}</span>
+  `;
+
+  const callsEl = document.getElementById('agent-detail-calls');
+  if (!data.calls.length) {
+    callsEl.innerHTML = '<p class="empty-note">No calls yet.</p>';
+    return;
+  }
+  callsEl.innerHTML = '';
+  data.calls.forEach((c) => {
+    const dur = Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000));
+    const when = new Date(c.answeredAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const kioskPart = c.kioskId ? ` · ${escapeHtml(c.kioskId)}` : '';
+    const holdPart = c.holdSeconds ? ` · on hold ${formatDuration(c.holdSeconds)}` : '';
+    const notesPart = c.notes ? `<div class="acr-notes">"${escapeHtml(c.notes)}"</div>` : '';
+    const recordingPart = c.recording
+      ? `<div class="agent-call-recording"><a href="${escapeHtml(c.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(c.recording.bytes)}</span></div>`
+      : '';
+    const ratingPart = c.rating
+      ? `<div class="agent-call-rating"><span class="acr-stars">${starGlyphs(c.rating.stars)}</span>${c.rating.guestName ? ` <span class="acr-rater">— ${escapeHtml(c.rating.guestName)}</span>` : ''}${c.rating.remarks ? `<div class="acr-notes">"${escapeHtml(c.rating.remarks)}"</div>` : ''}</div>`
+      : '';
+    const row = document.createElement('div');
+    row.className = 'agent-call-row';
+    row.innerHTML = `
+      <div class="acr-top"><span>${escapeHtml(c.topic)}${kioskPart}</span><span>${when}</span></div>
+      <div>${formatDuration(dur)}${holdPart}</div>
+      ${notesPart}${recordingPart}${ratingPart}
+    `;
+    callsEl.appendChild(row);
+  });
+}
+
+function formatBytes(n) {
+  if (!n) return '';
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+document.getElementById('btn-close-agent-detail').addEventListener('click', () => {
+  document.getElementById('agent-detail-modal').classList.add('hidden');
+});
+document.getElementById('agent-detail-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'agent-detail-modal') e.currentTarget.classList.add('hidden');
+});
+
+// ---- Video call configuration (max hold duration) ----
+
+async function loadHoldConfig() {
+  try {
+    const data = await api('/api/admin/config');
+    document.getElementById('hold-config-max-seconds').value = data.config.maxHoldSeconds;
+    document.getElementById('hold-config-max-seconds').min = data.min;
+    document.getElementById('hold-config-max-seconds').max = data.max;
+    updateHoldConfigPreview();
+  } catch { /* leave the field blank rather than interrupting the dashboard load */ }
+}
+
+function updateHoldConfigPreview() {
+  const val = Number(document.getElementById('hold-config-max-seconds').value);
+  const preview = document.getElementById('hold-config-preview');
+  if (!Number.isFinite(val) || val <= 0) { preview.textContent = ''; return; }
+  preview.textContent = `= ${formatDuration(val)}`;
+}
+document.getElementById('hold-config-max-seconds').addEventListener('input', updateHoldConfigPreview);
+
+document.getElementById('hold-config-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('hold-config-error');
+  const okEl = document.getElementById('hold-config-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const maxHoldSeconds = Number(document.getElementById('hold-config-max-seconds').value);
+  try {
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ maxHoldSeconds }) });
+    warnIfNotPersisted(result);
+    okEl.textContent = 'Saved. Applies to holds started from now on.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 2500);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
 
 function formatDuration(totalSeconds) {
   if (!totalSeconds) return '0:00';

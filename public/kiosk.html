@@ -65,6 +65,11 @@
         <span id="call-timer">0:00</span>
       </div>
       <div class="rec-notice">🔴 This call may be recorded for quality and training purposes.</div>
+      <div id="hold-overlay" class="hold-overlay hidden">
+        <div class="hold-overlay-icon">⏸</div>
+        <h2>You're on hold</h2>
+        <p class="sub">Thanks for your patience — the agent will be right back with you.</p>
+      </div>
       <div class="call-controls">
         <button id="btn-toggle-mic" class="ctrl-btn" aria-label="Toggle microphone">🎤</button>
         <button id="btn-toggle-cam" class="ctrl-btn" aria-label="Toggle camera">📷</button>
@@ -79,6 +84,25 @@
       <div class="check-mark">✓</div>
       <h2>Thanks for stopping by!</h2>
       <p class="sub" id="ended-message">We hope we could help. Have a great stay.</p>
+
+      <div id="rating-prompt" class="rating-prompt hidden">
+        <p class="rating-question" id="rating-question">How was your call?</p>
+        <div id="star-rating" class="star-rating" role="radiogroup" aria-label="Rate your call from 1 to 5 stars">
+          <button type="button" class="star-btn" data-star="1" aria-label="1 star">★</button>
+          <button type="button" class="star-btn" data-star="2" aria-label="2 stars">★</button>
+          <button type="button" class="star-btn" data-star="3" aria-label="3 stars">★</button>
+          <button type="button" class="star-btn" data-star="4" aria-label="4 stars">★</button>
+          <button type="button" class="star-btn" data-star="5" aria-label="5 stars">★</button>
+        </div>
+        <div id="rating-details" class="rating-details hidden">
+          <input id="rating-name" type="text" placeholder="Your name (optional)" maxlength="60" autocomplete="off" />
+          <textarea id="rating-remarks" placeholder="Any comments? (optional)" maxlength="500" rows="3"></textarea>
+          <button type="button" id="btn-submit-rating" class="btn btn-primary">Submit</button>
+        </div>
+        <button type="button" id="btn-skip-rating" class="link-btn-inline rating-skip">No thanks</button>
+      </div>
+
+      <p id="rating-thanks" class="sub hidden">🙏 Thanks for your feedback!</p>
     </div>
   </section>
 

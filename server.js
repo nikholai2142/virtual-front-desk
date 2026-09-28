@@ -103,6 +103,34 @@ async function saveAdminPassword(password) {
   return store.persistAdminPassword(password);
 }
 
+// ---- App config (video call configuration) -----------------------------
+// Currently just the max hold duration, but this is the one place to add
+// more admin-tunable video-call settings later. Same seed/fallback pattern
+// as the admin password: a local config.json is the seed for a brand-new
+// Redis database and the fallback when Redis isn't configured.
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+const DEFAULT_CONFIG = { maxHoldSeconds: 300 }; // 5 minutes
+const MIN_HOLD_SECONDS = 10;
+const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
+function readLocalConfigFile() {
+  try {
+    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
+  } catch {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+let CONFIG = readLocalConfigFile(); // replaced with the real Redis-backed value during startup, see main() below
+
+/** Saves the current app config. Returns true only if it actually reached persistent storage. */
+async function saveConfig() {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(CONFIG, null, 2));
+  } catch (err) {
+    console.error('Could not write config.json locally (non-fatal):', err.message);
+  }
+  return store.persistConfig(CONFIG);
+}
+
 const MAX_WAIT_WARN_MS = 60 * 1000; // client shows a "still connecting" notice
 // Only applies when Redis isn't configured — call history is then purely
 // in-memory (same as before), so it's capped to avoid unbounded growth.
@@ -328,7 +356,18 @@ function serveStatic(req, res) {
 // ======================================================================
 
 let nextCallId = 1;
-/** callId -> { topic, guestConn, agentConn, agentName, queuedAt, answeredAt, notes } */
+/**
+ * callId -> {
+ *   topic, kioskId, guestConn, agentConn, agentId, agentName,
+ *   queuedAt, answeredAt, notes,
+ *   onHold, holdStartedAt, holdSecondsTotal, holdCount, holdWarnTimer, holdExpireTimer,
+ * }
+ * The hold fields track HOLD (see "Call hold" section below): whether the
+ * call is on hold right now, when the current hold began, accumulated hold
+ * seconds across every hold during this call (added to holdSecondsTotal
+ * each time a hold ends), how many times it's been put on hold, and the
+ * two scheduled timers (30s warning + auto-resume) for the hold in progress.
+ */
 const calls = new Map();
 /** ordered array of callIds waiting for an agent */
 const queue = [];
@@ -367,9 +406,78 @@ function removeFromQueue(callId) {
   if (idx !== -1) queue.splice(idx, 1);
 }
 
+// ======================================================================
+// Call hold — an agent can put an active call on hold; the guest and agent
+// both see an on-hold state (no live audio/video from the agent's side —
+// see agent.js, which mutes its own tracks rather than renegotiating the
+// peer connection). The hold has a maximum duration set by the admin
+// (CONFIG.maxHoldSeconds): the agent gets a warning 30 seconds before it
+// expires, and if nobody resumes it manually by then, the call resumes on
+// its own so a guest can never be left on hold indefinitely by mistake.
+// ======================================================================
+
+function clearHoldTimers(call) {
+  if (call.holdWarnTimer) { clearTimeout(call.holdWarnTimer); call.holdWarnTimer = null; }
+  if (call.holdExpireTimer) { clearTimeout(call.holdExpireTimer); call.holdExpireTimer = null; }
+}
+
+/** Folds the current hold's elapsed time into the call's running total. Safe to call even if not on hold. */
+function accumulateHoldTime(call) {
+  if (!call.onHold || !call.holdStartedAt) return;
+  call.holdSecondsTotal = (call.holdSecondsTotal || 0) + Math.max(0, Math.round((Date.now() - call.holdStartedAt) / 1000));
+  call.holdStartedAt = null;
+}
+
+function beginHold(callId) {
+  const call = calls.get(callId);
+  if (!call || call.onHold) return;
+  clearHoldTimers(call);
+  call.onHold = true;
+  call.holdStartedAt = Date.now();
+  call.holdCount = (call.holdCount || 0) + 1;
+  const maxHoldSeconds = CONFIG.maxHoldSeconds;
+
+  // call-hold has to reach the agent BEFORE any hold-expiring-soon — the
+  // client only acts on the warning once it already thinks it's on hold, so
+  // sending them in the other order (possible below, when the configured
+  // limit is short enough to warn immediately) would leave that first
+  // warning silently ignored.
+  const payload = { type: 'call-hold', callId, maxHoldSeconds, holdStartedAt: call.holdStartedAt };
+  if (call.agentConn && call.agentConn.alive) call.agentConn.send(payload);
+  if (call.guestConn && call.guestConn.alive) call.guestConn.send(payload);
+
+  if (maxHoldSeconds > 30) {
+    call.holdWarnTimer = setTimeout(() => {
+      if (call.agentConn && call.agentConn.alive) {
+        call.agentConn.send({ type: 'hold-expiring-soon', callId, secondsLeft: 30 });
+      }
+    }, (maxHoldSeconds - 30) * 1000);
+  } else {
+    // Too short a limit for a separate 30s-out warning — just warn immediately.
+    if (call.agentConn && call.agentConn.alive) {
+      call.agentConn.send({ type: 'hold-expiring-soon', callId, secondsLeft: maxHoldSeconds });
+    }
+  }
+  call.holdExpireTimer = setTimeout(() => resumeHold(callId, 'timeout'), maxHoldSeconds * 1000);
+}
+
+function resumeHold(callId, reason) {
+  const call = calls.get(callId);
+  if (!call || !call.onHold) return;
+  clearHoldTimers(call);
+  accumulateHoldTime(call);
+  call.onHold = false;
+
+  const payload = { type: 'call-resumed', callId, reason };
+  if (call.agentConn && call.agentConn.alive) call.agentConn.send(payload);
+  if (call.guestConn && call.guestConn.alive) call.guestConn.send(payload);
+}
+
 function endCall(callId, reason) {
   const call = calls.get(callId);
   if (!call) return;
+  clearHoldTimers(call);
+  accumulateHoldTime(call); // in case the call ends while still on hold
   removeFromQueue(callId);
   calls.delete(callId);
 
@@ -385,12 +493,15 @@ function endCall(callId, reason) {
       callId,
       topic: call.topic,
       kioskId: call.kioskId,
+      agentId: call.agentId || null,
       agentName: call.agentName || null,
       queuedAt: call.queuedAt,
       answeredAt: call.answeredAt,
       endedAt: Date.now(),
       notes: call.notes || '',
       outcome: reason,
+      holdSeconds: call.holdSecondsTotal || 0,
+      holdCount: call.holdCount || 0,
     };
     callLog.push(entry);
     // Without Redis, history is memory-only, so keep it bounded like before.
@@ -484,37 +595,74 @@ async function handlePasswordResetRequest(req, res) {
 // request (no sessions/cookies — this is a small internal tool, not a
 // public-facing login system). Swap for real auth before this matters.
 
-function computeAgentStats() {
-  const byAgent = new Map(); // name -> { calls, totalTalkSeconds, kiosks: Map, lastCallAt }
-  for (const entry of callLog) {
-    const name = entry.agentName || 'Unknown';
-    if (!byAgent.has(name)) {
-      byAgent.set(name, { agentName: name, calls: 0, totalTalkSeconds: 0, kiosks: new Map(), lastCallAt: 0 });
-    }
-    const stat = byAgent.get(name);
-    stat.calls += 1;
-    stat.totalTalkSeconds += Math.max(0, Math.round((entry.endedAt - entry.answeredAt) / 1000));
+/**
+ * Every call log entry belonging to one agent. Matches by agentId when the
+ * entry has one (every call answered after this field was added); falls
+ * back to matching by name for older entries recorded before that, so
+ * pre-existing history doesn't just disappear from stats.
+ */
+function entriesForAgent(agent) {
+  return callLog.filter((e) => (e.agentId ? e.agentId === agent.id : e.agentName === agent.name));
+}
+
+function statsForEntries(entries) {
+  const totalTalkSeconds = entries.reduce((sum, e) => sum + Math.max(0, Math.round((e.endedAt - e.answeredAt) / 1000)), 0);
+  const totalHoldSeconds = entries.reduce((sum, e) => sum + (e.holdSeconds || 0), 0);
+  const totalHoldCount = entries.reduce((sum, e) => sum + (e.holdCount || 0), 0);
+  const kiosks = new Map();
+  let lastCallAt = 0;
+  for (const e of entries) {
     // Kiosk, not topic, is the interesting breakdown now that every call is
     // the same "Front Desk" topic — this shows which kiosk keeps an agent busiest.
-    if (entry.kioskId) stat.kiosks.set(entry.kioskId, (stat.kiosks.get(entry.kioskId) || 0) + 1);
-    stat.lastCallAt = Math.max(stat.lastCallAt, entry.endedAt);
+    if (e.kioskId) kiosks.set(e.kioskId, (kiosks.get(e.kioskId) || 0) + 1);
+    lastCallAt = Math.max(lastCallAt, e.endedAt);
   }
-  // Include agents with zero calls too, so a brand-new agent shows up at 0 rather than being absent.
-  for (const a of AGENTS) {
-    if (!byAgent.has(a.name)) {
-      byAgent.set(a.name, { agentName: a.name, calls: 0, totalTalkSeconds: 0, kiosks: new Map(), lastCallAt: 0 });
-    }
+  const callRatings = entries.map((e) => ratingForCall(e.callId)).filter(Boolean);
+  const ratingCount = callRatings.length;
+  const avgRating = ratingCount ? Math.round((callRatings.reduce((sum, r) => sum + r.stars, 0) / ratingCount) * 10) / 10 : null;
+  return {
+    calls: entries.length,
+    totalTalkSeconds,
+    avgTalkSeconds: entries.length ? Math.round(totalTalkSeconds / entries.length) : 0,
+    totalHoldSeconds,
+    totalHoldCount,
+    topKiosk: [...kiosks.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+    lastCallAt: lastCallAt || null,
+    avgRating,
+    ratingCount,
+  };
+}
+
+function computeAgentStats() {
+  const rows = AGENTS.map((a) => ({ agentId: a.id, agentName: a.name, ...statsForEntries(entriesForAgent(a)) }));
+
+  // Calls from agents who've since been removed shouldn't just vanish from
+  // the numbers — group those by name under an id-less row instead.
+  const knownIds = new Set(AGENTS.map((a) => a.id));
+  const knownNames = new Set(AGENTS.map((a) => a.name));
+  const orphanEntriesByName = new Map();
+  for (const e of callLog) {
+    const belongsToKnownAgent = e.agentId ? knownIds.has(e.agentId) : knownNames.has(e.agentName);
+    if (belongsToKnownAgent) continue;
+    const name = e.agentName || 'Unknown';
+    if (!orphanEntriesByName.has(name)) orphanEntriesByName.set(name, []);
+    orphanEntriesByName.get(name).push(e);
   }
-  return [...byAgent.values()]
-    .map((s) => ({
-      agentName: s.agentName,
-      calls: s.calls,
-      totalTalkSeconds: s.totalTalkSeconds,
-      avgTalkSeconds: s.calls ? Math.round(s.totalTalkSeconds / s.calls) : 0,
-      topKiosk: [...s.kiosks.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null,
-      lastCallAt: s.lastCallAt || null,
-    }))
-    .sort((a, b) => b.calls - a.calls);
+  for (const [name, entries] of orphanEntriesByName) {
+    rows.push({ agentId: null, agentName: name, ...statsForEntries(entries) });
+  }
+
+  return rows.sort((a, b) => b.calls - a.calls);
+}
+
+/** Full call history + totals for one agent, including recording links — the admin dashboard's agent-detail view. */
+function computeAgentDetail(agent) {
+  const entries = entriesForAgent(agent).sort((a, b) => b.answeredAt - a.answeredAt);
+  return {
+    agent: { id: agent.id, name: agent.name },
+    totals: statsForEntries(entries),
+    calls: entries.map((e) => ({ ...e, recording: recordingForCall(e.callId), rating: ratingForCall(e.callId) })),
+  };
 }
 
 function sendJson(res, status, body) {
@@ -562,6 +710,18 @@ function readRawBody(req) {
 // intentionally short-lived and scoped for exactly this — safe to give to
 // any client. See turn.js.
 // ======================================================================
+
+// ======================================================================
+// Public call config — the agent dashboard shows the configured max hold
+// duration next to the Hold button (so an agent knows the limit before
+// they hit it, not just when the 30s warning arrives). No admin auth here,
+// same reasoning as TURN credentials above: it only ever reveals a
+// duration in seconds, nothing sensitive.
+// ======================================================================
+
+function handleCallConfig(req, res) {
+  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds });
+}
 
 async function handleTurnCredentials(req, res) {
   if (turn.configured) {
@@ -817,6 +977,57 @@ function handleRecordingFile(req, res, rawFilename) {
 }
 
 // ======================================================================
+// Call ratings — after a call ends, the kiosk offers the guest a 1-5 star
+// rating with an optional name and remarks (see kiosk.js's "ended" screen).
+// Ratings are keyed by callId and folded into the matching call log entry
+// wherever one's shown (agent call log, admin stats, admin agent detail) —
+// same pattern as recordings via recordingForCall() above. This endpoint is
+// intentionally unauthenticated (a guest submitting it has no account to
+// authenticate with, same reasoning as the password-reset endpoint), but it
+// only accepts a rating for a callId that's actually in the call log — a
+// real, already-ended call — so it can't be used to inject arbitrary
+// standalone data.
+// ======================================================================
+
+/** callId -> { callId, stars, guestName, remarks, ratedAt } */
+const ratings = new Map();
+const RATING_REMARKS_MAX_LENGTH = 500;
+const RATING_NAME_MAX_LENGTH = 60;
+
+/** Returns the rating for this call, or null if it hasn't been rated (yet, or ever). */
+function ratingForCall(callId) {
+  return ratings.get(callId) || null;
+}
+
+async function handleSubmitRating(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+
+  const callId = Number(body.callId);
+  const stars = Math.round(Number(body.stars));
+  if (!Number.isInteger(callId) || callId <= 0) { sendJson(res, 400, { error: 'invalid or missing callId' }); return; }
+  if (!Number.isInteger(stars) || stars < 1 || stars > 5) { sendJson(res, 400, { error: 'stars must be an integer from 1 to 5' }); return; }
+  if (!callLog.some((e) => e.callId === callId)) {
+    // Either this callId never happened, or (more likely in practice) the
+    // rating request raced the call-log write on call end — either way,
+    // there's nothing to attach it to.
+    sendJson(res, 404, { error: 'no completed call with that id' });
+    return;
+  }
+
+  const rating = {
+    callId,
+    stars,
+    guestName: String(body.guestName || '').trim().slice(0, RATING_NAME_MAX_LENGTH),
+    remarks: String(body.remarks || '').trim().slice(0, RATING_REMARKS_MAX_LENGTH),
+    ratedAt: Date.now(),
+  };
+  ratings.set(callId, rating);
+  store.persistRating(rating).catch(() => {});
+  sendJson(res, 200, { ok: true });
+}
+
+// ======================================================================
 // Webhooks — Meta calls these when a guest sends a WhatsApp or Messenger
 // message. See chat.js for the API calls and payload parsing; this just
 // wires HTTP routing + the one-time verification handshake.
@@ -907,6 +1118,34 @@ async function handleAdminApi(req, res, urlObj) {
     if (AGENTS.length === before) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
     const persisted = await saveAgents();
     sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const agentDetailMatch = urlObj.pathname.match(/^\/api\/admin\/agents\/([^/]+)\/detail$/);
+  if (agentDetailMatch && req.method === 'GET') {
+    const id = decodeURIComponent(agentDetailMatch[1]);
+    const agent = AGENTS.find((a) => a.id === id);
+    if (!agent) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
+    sendJson(res, 200, computeAgentDetail(agent));
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/config' && req.method === 'GET') {
+    sendJson(res, 200, { config: CONFIG, min: MIN_HOLD_SECONDS, max: MAX_HOLD_SECONDS });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/config' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const maxHoldSeconds = Math.round(Number(body.maxHoldSeconds));
+    if (!Number.isFinite(maxHoldSeconds) || maxHoldSeconds < MIN_HOLD_SECONDS || maxHoldSeconds > MAX_HOLD_SECONDS) {
+      sendJson(res, 400, { error: `maxHoldSeconds must be a number between ${MIN_HOLD_SECONDS} and ${MAX_HOLD_SECONDS}` });
+      return;
+    }
+    CONFIG = { ...CONFIG, maxHoldSeconds };
+    const persisted = await saveConfig();
+    sendJson(res, 200, { config: CONFIG, persisted, persistenceConfigured: store.configured });
     return;
   }
 
@@ -1106,6 +1345,7 @@ function handleAgentConnection(conn) {
       }
       removeFromQueue(callId);
       call.agentConn = conn;
+      call.agentId = agentId;
       call.agentName = agentName;
       call.answeredAt = Date.now();
       conn.send({ type: 'call-assigned', callId, topic: call.topic, kioskId: call.kioskId, queuedAt: call.queuedAt });
@@ -1124,6 +1364,18 @@ function handleAgentConnection(conn) {
       return;
     }
 
+    if (msg.type === 'hold-call' && msg.callId) {
+      const call = calls.get(msg.callId);
+      if (call && call.agentConn === conn) beginHold(msg.callId);
+      return;
+    }
+
+    if (msg.type === 'resume-call' && msg.callId) {
+      const call = calls.get(msg.callId);
+      if (call && call.agentConn === conn) resumeHold(msg.callId, 'manual');
+      return;
+    }
+
     if (msg.type === 'note' && msg.callId) {
       const call = calls.get(msg.callId);
       if (call && call.agentConn === conn) call.notes = String(msg.text || '').slice(0, 2000);
@@ -1137,7 +1389,7 @@ function handleAgentConnection(conn) {
     }
 
     if (msg.type === 'get-log') {
-      const entries = callLog.slice(-50).reverse().map((e) => ({ ...e, recording: recordingForCall(e.callId) }));
+      const entries = callLog.slice(-50).reverse().map((e) => ({ ...e, recording: recordingForCall(e.callId), rating: ratingForCall(e.callId) }));
       conn.send({ type: 'call-log', entries });
       return;
     }
@@ -1216,6 +1468,10 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (urlObj.pathname === '/api/call-config' && req.method === 'GET') {
+    handleCallConfig(req, res);
+    return;
+  }
   if (urlObj.pathname === '/api/agent/request-password-reset' && req.method === 'POST') {
     handlePasswordResetRequest(req, res).catch((err) => {
       console.error('[password-reset] unhandled error:', err);
@@ -1233,6 +1489,13 @@ const server = http.createServer((req, res) => {
   if (urlObj.pathname === '/api/recordings/finish' && req.method === 'POST') {
     handleRecordingFinish(req, res).catch((err) => {
       console.error('[recordings] finish error:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    });
+    return;
+  }
+  if (urlObj.pathname === '/api/ratings' && req.method === 'POST') {
+    handleSubmitRating(req, res).catch((err) => {
+      console.error('[ratings] unhandled error:', err);
       sendJson(res, 500, { error: 'internal error' });
     });
     return;
@@ -1344,8 +1607,10 @@ async function main() {
     await saveAgents();
   }
   ADMIN_PASSWORD = await store.loadAdminPassword(ADMIN_PASSWORD);
+  CONFIG = await store.loadConfig(CONFIG);
   callLog.push(...await store.loadCallLog());
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
+  for (const r of await store.loadRatings()) ratings.set(r.callId, r);
 
   if (turn.configured) {
     console.log('[turn] Cloudflare TURN configured — calls will use it to connect across networks that block direct peer-to-peer.');

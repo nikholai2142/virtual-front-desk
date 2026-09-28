@@ -112,6 +112,14 @@ html, body {
   background: var(--panel);
 }
 .queue-panel h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--sub); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.ring-toggle-btn {
+  margin-left: auto; background: transparent; border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; width: 26px; height: 26px; cursor: pointer;
+  font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  text-transform: none; letter-spacing: normal;
+}
+.ring-toggle-btn:hover { background: var(--panel-2); }
+.ring-toggle-btn.muted { color: var(--sub); border-color: var(--border); opacity: 0.7; }
 .log-heading { margin-top: 28px; }
 .count-badge {
   background: var(--accent); color: white; border-radius: 999px;
@@ -170,13 +178,41 @@ html, body {
 }
 .recording-indicator.hidden { display: none; }
 @keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.hold-badge {
+  margin-left: 10px; color: #f6c76a; font-size: 12px; font-weight: 600;
+  background: #3a2a12; border: 1px solid #5a4520; border-radius: 999px; padding: 2px 10px;
+}
+.hold-badge.hidden { display: none; }
 .call-buttons { display: flex; gap: 10px; }
 .ctrl-btn {
   border: none; border-radius: 10px; padding: 10px 16px; cursor: pointer;
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
 }
 .ctrl-btn.off { background: #3a2a12; color: #f6c76a; }
+.ctrl-btn.hold-active { background: #3a2a12; color: #f6c76a; border-color: #5a4520; }
+.ctrl-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .ctrl-end { background: var(--danger); color: white; border: none; }
+
+/* On-hold overlay over the video stage */
+.hold-overlay {
+  position: absolute; inset: 0; z-index: 5;
+  background: rgba(9, 13, 24, 0.88);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--text); text-align: center; padding: 20px;
+}
+.hold-overlay.hidden { display: none; }
+.hold-overlay-icon { font-size: 40px; margin-bottom: 8px; }
+.hold-overlay-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+.hold-countdown { color: var(--sub); font-size: 14px; }
+.hold-overlay.expiring .hold-overlay-icon,
+.hold-overlay.expiring .hold-countdown {
+  color: #f6c76a;
+}
+.hold-overlay.expiring .hold-countdown {
+  font-weight: 700;
+  animation: hold-expiring-pulse 1s ease-in-out infinite;
+}
+@keyframes hold-expiring-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 #call-notes {
   width: 100%; margin-top: 16px; min-height: 100px; padding: 12px;
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);

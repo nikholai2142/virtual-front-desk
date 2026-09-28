@@ -57,10 +57,39 @@
       <section class="panel">
         <h2>Performance</h2>
         <p id="stats-note" class="stats-note"></p>
+        <p class="stats-hint">Click an agent for their full call history and recordings.</p>
         <div id="stats-table" class="stats-table"></div>
+      </section>
+
+      <section class="panel panel-full">
+        <h2>Video call configuration</h2>
+        <form id="hold-config-form" class="hold-config-form">
+          <label for="hold-config-max-seconds">Maximum hold duration</label>
+          <p class="sub-tight">When an agent puts a call on hold, it resumes on its own after this long if nobody resumes it first. The agent is warned 30 seconds before it expires.</p>
+          <div class="hold-config-row">
+            <input id="hold-config-max-seconds" type="number" min="10" max="3600" step="5" />
+            <span class="hold-config-unit">seconds</span>
+            <span id="hold-config-preview" class="hold-config-preview"></span>
+            <button type="submit" class="btn btn-primary">Save</button>
+          </div>
+          <p id="hold-config-error" class="error hidden"></p>
+          <p id="hold-config-success" class="hint hidden"></p>
+        </form>
       </section>
     </main>
   </section>
+
+  <!-- AGENT DETAIL -->
+  <div id="agent-detail-modal" class="modal-overlay hidden">
+    <div class="modal-card agent-detail-card">
+      <div class="agent-detail-header">
+        <h2 id="agent-detail-name">—</h2>
+        <button type="button" id="btn-close-agent-detail" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div id="agent-detail-totals" class="agent-detail-totals"></div>
+      <div id="agent-detail-calls" class="agent-detail-calls"></div>
+    </div>
+  </div>
 
   <!-- CHANGE PASSWORD -->
   <div id="change-password-modal" class="modal-overlay hidden">

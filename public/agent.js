@@ -34,7 +34,6 @@ let currentKioskId = null;
 let callStartedAt = null;
 let callTimerHandle = null;
 let noteDebounce = null;
-let knownQueueIds = new Set();
 let micOn = true;
 let camOn = true;
 let chatConversations = new Map(); // conversationId -> conversation
@@ -42,6 +41,12 @@ let selectedChatId = null;
 let connectTimeoutHandle = null;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
 let recording = null; // active call-recording session, see startRecording() below
+
+// ---- Call hold -----------------------------------------------------------
+let onHold = false;
+let holdDeadline = null; // ms epoch — when the current hold auto-resumes
+let holdCountdownHandle = null;
+let configuredMaxHoldSeconds = 300; // refreshed from the server, see refreshCallConfig()
 
 function beep() {
   try {
@@ -54,6 +59,63 @@ function beep() {
     osc.start();
     setTimeout(() => { osc.stop(); ctx.close(); }, 180);
   } catch { /* ignore */ }
+}
+
+// ---- Incoming-call ring tone ---------------------------------------------
+// A single beep() on a new queue arrival is easy to miss if the agent isn't
+// looking at the screen. This plays a repeating two-pulse "ring…ring…" tone
+// (like a phone) for as long as a guest is waiting and this agent is free to
+// take the call, and stops the moment it's answered (by this agent or
+// another) or the agent goes into their own call.
+const RING_MUTED_STORAGE_KEY = 'vfd_ring_muted';
+let ringMuted = localStorage.getItem(RING_MUTED_STORAGE_KEY) === '1';
+let ringAudioCtx = null;
+let ringIntervalHandle = null;
+let ringActive = false;
+let lastQueueLength = 0;
+
+function playRingPulse() {
+  try {
+    if (!ringAudioCtx) ringAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = ringAudioCtx;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const now = ctx.currentTime;
+    // Two short tones back-to-back, like a phone bell's double ring.
+    [0, 0.28].forEach((offset) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 950;
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.linearRampToValueAtTime(0.16, now + offset + 0.02);
+      gain.gain.linearRampToValueAtTime(0.0001, now + offset + 0.22);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.24);
+    });
+  } catch { /* ignore */ }
+}
+
+function startRinging() {
+  if (ringActive || ringMuted) return;
+  ringActive = true;
+  playRingPulse();
+  ringIntervalHandle = setInterval(playRingPulse, 2200);
+}
+
+function stopRinging() {
+  ringActive = false;
+  clearInterval(ringIntervalHandle);
+  ringIntervalHandle = null;
+}
+
+/** Call after anything that could change whether we should be ringing: a queue update, answering a call, or a call ending. */
+function updateRingingState() {
+  if (lastQueueLength > 0 && !currentCallId && !ringMuted) {
+    startRinging();
+  } else {
+    stopRinging();
+  }
 }
 
 // sessionStorage (not localStorage): survives a page refresh, but clears
@@ -165,6 +227,7 @@ function handleServerMessage(msg) {
       currentCallId = msg.callId;
       currentTopic = msg.topic;
       currentKioskId = msg.kioskId;
+      updateRingingState();
       startAsAnswerer();
       break;
 
@@ -174,6 +237,18 @@ function handleServerMessage(msg) {
 
     case 'call-log':
       renderCallLog(msg.entries);
+      break;
+
+    case 'call-hold':
+      handleHoldStarted(msg.maxHoldSeconds, msg.holdStartedAt);
+      break;
+
+    case 'hold-expiring-soon':
+      handleHoldExpiringSoon(msg.secondsLeft);
+      break;
+
+    case 'call-resumed':
+      handleHoldResumed(msg.reason);
       break;
 
     case 'call-ended':
@@ -317,10 +392,8 @@ function renderQueue(queue) {
   document.getElementById('queue-count').textContent = queue.length;
   const list = document.getElementById('queue-list');
 
-  const newIds = new Set(queue.map((q) => q.callId));
-  const hasNew = [...newIds].some((id) => !knownQueueIds.has(id));
-  if (hasNew && knownQueueIds.size > 0) beep();
-  knownQueueIds = newIds;
+  lastQueueLength = queue.length;
+  updateRingingState();
 
   if (queue.length === 0) {
     list.innerHTML = '<p class="empty-note">No guests waiting.</p>';
@@ -341,6 +414,7 @@ function renderQueue(queue) {
         alert('End your current call before answering another.');
         return;
       }
+      stopRinging(); // instant feedback — the call-assigned/queue-update round trip is a moment away
       wsSend({ type: 'answer-call', callId: item.callId });
     });
     list.appendChild(div);
@@ -374,12 +448,116 @@ function renderCallLog(entries) {
     div.className = 'call-log-entry';
     const time = new Date(e.answeredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const kioskPart = e.kioskId ? ` · ${escapeHtml(e.kioskId)}` : '';
+    const holdPart = e.holdSeconds ? ` · on hold ${formatMMSS(e.holdSeconds)}` : '';
     const recordingPart = e.recording
       ? `<div class="log-recording"><a href="${escapeHtml(e.recording.url)}" target="_blank" rel="noopener">▶ Play recording</a><span class="rec-size">${formatBytes(e.recording.bytes)}</span></div>`
       : '';
-    div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong>${kioskPart} · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}${recordingPart}`;
+    div.innerHTML = `<strong>${escapeHtml(e.topic)}</strong>${kioskPart} · ${e.agentName || '—'}<br>${time} · ${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}${holdPart}${recordingPart}`;
     box.appendChild(div);
   });
+}
+
+function formatMMSS(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Fetches the admin-configured max hold duration (no auth needed — see server.js). Best-effort: keeps the last known value on failure. */
+async function refreshCallConfig() {
+  try {
+    const res = await fetch('/api/call-config');
+    const data = await res.json();
+    if (Number.isFinite(data.maxHoldSeconds)) configuredMaxHoldSeconds = data.maxHoldSeconds;
+  } catch { /* keep the previous value */ }
+  const holdBtn = document.getElementById('btn-toggle-hold');
+  if (holdBtn && !onHold) holdBtn.title = `Put call on hold (auto-resumes after ${formatMMSS(configuredMaxHoldSeconds)})`;
+}
+
+function resetHoldUI() {
+  onHold = false;
+  holdDeadline = null;
+  clearInterval(holdCountdownHandle);
+  holdCountdownHandle = null;
+  document.getElementById('hold-overlay').classList.add('hidden');
+  document.getElementById('hold-overlay').classList.remove('expiring');
+  document.getElementById('hold-badge').classList.add('hidden');
+  const holdBtn = document.getElementById('btn-toggle-hold');
+  holdBtn.textContent = '⏸ Hold';
+  holdBtn.classList.remove('hold-active');
+  holdBtn.disabled = false;
+  holdBtn.title = `Put call on hold (auto-resumes after ${formatMMSS(configuredMaxHoldSeconds)})`;
+  document.getElementById('btn-toggle-mic').disabled = false;
+  document.getElementById('btn-toggle-cam').disabled = false;
+}
+
+function tickHoldCountdown() {
+  const el = document.getElementById('hold-countdown');
+  const remainingMs = holdDeadline - Date.now();
+  el.textContent = remainingMs <= 0 ? 'Resuming…' : `Resumes automatically in ${formatMMSS(remainingMs / 1000)}`;
+}
+
+/** The call-hold message the server sends back once beginHold() runs — this is what actually flips the UI into "on hold", not the button click itself, so the countdown is always based on the server's authoritative start time. */
+function handleHoldStarted(maxHoldSeconds, holdStartedAt) {
+  onHold = true;
+  holdDeadline = holdStartedAt + maxHoldSeconds * 1000;
+
+  document.getElementById('hold-overlay').classList.remove('hidden');
+  document.getElementById('hold-overlay').classList.remove('expiring');
+  document.getElementById('hold-badge').classList.remove('hidden');
+  const holdBtn = document.getElementById('btn-toggle-hold');
+  holdBtn.textContent = '▶ Resume';
+  holdBtn.classList.add('hold-active');
+  holdBtn.disabled = false;
+  holdBtn.title = 'Resume the call';
+  document.getElementById('btn-toggle-mic').disabled = true;
+  document.getElementById('btn-toggle-cam').disabled = true;
+
+  // No SDP renegotiation — disabling the local tracks is what actually makes
+  // this a "hold" for the guest (they get silence / a frozen frame from us),
+  // while the on-screen overlay (both sides) makes it obvious why.
+  if (localStream) {
+    localStream.getAudioTracks().forEach((t) => (t.enabled = false));
+    localStream.getVideoTracks().forEach((t) => (t.enabled = false));
+  }
+
+  clearInterval(holdCountdownHandle);
+  tickHoldCountdown();
+  holdCountdownHandle = setInterval(tickHoldCountdown, 1000);
+}
+
+function holdExpiringChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    [720, 600, 480].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = now + i * 0.18;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.15, t + 0.02);
+      gain.gain.linearRampToValueAtTime(0.0001, t + 0.16);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.18);
+    });
+    setTimeout(() => { try { ctx.close(); } catch { /* ignore */ } }, 800);
+  } catch { /* ignore */ }
+}
+
+function handleHoldExpiringSoon(secondsLeft) {
+  if (!onHold) return;
+  document.getElementById('hold-overlay').classList.add('expiring');
+  holdExpiringChime();
+}
+
+function handleHoldResumed(reason) {
+  resetHoldUI();
+  if (localStream) {
+    localStream.getAudioTracks().forEach((t) => (t.enabled = micOn));
+    localStream.getVideoTracks().forEach((t) => (t.enabled = camOn));
+  }
 }
 
 async function startAsAnswerer() {
@@ -387,6 +565,8 @@ async function startAsAnswerer() {
   document.getElementById('no-call-placeholder').classList.add('hidden');
   document.getElementById('active-call').classList.remove('hidden');
   document.getElementById('call-notes').value = '';
+  resetHoldUI();
+  refreshCallConfig();
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -625,6 +805,7 @@ async function handleSignal(signalType, data) {
 
 function endActiveCallUI() {
   stopRecording(); // captures what it needs before pc/localStream are torn down below
+  resetHoldUI();
   clearTimeout(connectTimeoutHandle);
   pendingIceCandidates = [];
   pendingSignals = [];
@@ -639,6 +820,7 @@ function endActiveCallUI() {
   micOn = true; camOn = true;
   document.getElementById('active-call').classList.add('hidden');
   document.getElementById('no-call-placeholder').classList.remove('hidden');
+  updateRingingState(); // resume ringing if another guest is still waiting
 }
 
 function failConnection() {
@@ -676,6 +858,32 @@ document.getElementById('btn-toggle-cam').addEventListener('click', (e) => {
   camOn = !camOn;
   if (localStream) localStream.getVideoTracks().forEach((t) => (t.enabled = camOn));
   e.currentTarget.classList.toggle('off', !camOn);
+});
+
+document.getElementById('btn-toggle-hold').addEventListener('click', (e) => {
+  if (!currentCallId) return;
+  e.currentTarget.disabled = true; // re-enabled once the server's call-hold/call-resumed echo arrives
+  if (onHold) {
+    wsSend({ type: 'resume-call', callId: currentCallId });
+  } else {
+    wsSend({ type: 'hold-call', callId: currentCallId });
+  }
+});
+
+function updateRingToggleButton() {
+  const btn = document.getElementById('btn-toggle-ring');
+  if (!btn) return;
+  btn.textContent = ringMuted ? '🔕' : '🔔';
+  btn.title = ringMuted ? 'Unmute ring tone' : 'Mute ring tone';
+  btn.classList.toggle('muted', ringMuted);
+}
+updateRingToggleButton();
+
+document.getElementById('btn-toggle-ring').addEventListener('click', () => {
+  ringMuted = !ringMuted;
+  localStorage.setItem(RING_MUTED_STORAGE_KEY, ringMuted ? '1' : '0');
+  updateRingToggleButton();
+  updateRingingState();
 });
 
 document.getElementById('call-notes').addEventListener('input', (e) => {

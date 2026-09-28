@@ -250,6 +250,83 @@ every call this way is actually compliant where you operate — check with
 whoever handles that for your property before turning this on for real
 guest calls.
 
+## Incoming-call ring tone
+
+When a guest starts a call from the kiosk, every signed-in agent's
+dashboard plays a repeating "ring…ring…" tone (a couple of quick tones
+every ~2 seconds) for as long as that guest is waiting unanswered — not
+just a one-off beep, so it's hard to miss if you've stepped away from the
+screen.
+
+- The ring stops the instant someone answers (whether that's you or
+  another agent), and doesn't play at all while you're already on a call.
+- If more than one guest is waiting, it keeps going until the queue is
+  empty again — and picks back up if a new guest arrives.
+- Each agent has their own 🔔 mute toggle next to "Waiting" in the queue
+  panel; muting stops the ring immediately and keeps it off even while a
+  guest is waiting, until you unmute it. This preference is remembered
+  per browser (not synced between agents or devices).
+- It's generated in the browser with the Web Audio API — no sound file
+  to host — so it plays as soon as the queue updates, with no extra
+  network request.
+
+## Call hold
+
+An agent can put an active call on hold from the **⏸ Hold** button next
+to End Call. The guest and the agent both see an "on hold" screen (the
+guest's: *"You're on hold"*; the agent's: a live countdown to when it
+auto-resumes), and the agent's mic/camera are muted for the guest for as
+long as the hold lasts.
+
+- **There's a maximum hold duration**, set by an admin under **Video call
+  configuration** in the `/admin` dashboard (default: 5 minutes). If
+  nobody resumes the call manually before that runs out, it **resumes on
+  its own** — a guest can never be stuck on hold indefinitely because
+  someone forgot about them.
+- **The agent is warned 30 seconds before it expires** — the on-hold
+  overlay switches to an amber warning state and a short chime plays, so
+  there's time to come back before it auto-resumes. (If the admin sets
+  the limit to 30 seconds or less, that warning fires immediately when
+  the hold starts instead, since there's no 30-seconds-out point to wait
+  for.)
+- **How it works technically:** rather than renegotiating the WebRTC
+  connection, going on hold just disables the agent's own audio/video
+  tracks (so the guest gets silence and a frozen frame) while the overlay
+  on both ends makes clear why. No media ever touches the server either
+  way — see "How it works" above.
+- **Hold time is tracked per call** and rolled into each agent's
+  performance stats — both the summary row and the full per-call detail
+  view (see "Admin dashboard" below) show total hold time and how many
+  times a call was put on hold.
+- A call can be held and resumed any number of times; the times add up
+  across the whole call for stats purposes.
+
+## Guest ratings
+
+After a call ends, the kiosk asks the guest to rate it — a quick way to
+see how agents are actually doing, straight from the people they helped.
+
+- **Shown automatically whenever a call actually connected** — whether the
+  agent ended it or the guest hung up. A guest who cancels before an agent
+  even answers never sees it, since there's no completed call to rate.
+- **1 to 5 stars, plus an optional name and remarks.** Tapping a star
+  reveals the optional name/remarks fields and a Submit button; there's
+  also a "No thanks" link for guests who'd rather skip it.
+- **Not a hard stop** — if the guest walks away without doing anything,
+  the kiosk gives up after 45 seconds and returns to the idle screen on
+  its own, the same way it always has.
+- **Folded into that agent's performance stats** — both the summary row
+  and the full per-call detail view in the `/admin` dashboard (see "Admin
+  dashboard" below) show the average rating and how many ratings it's
+  based on; the detail view also shows each individual rating — stars,
+  the guest's name (if given), and their remarks (if any) — next to the
+  call it belongs to.
+- **The submit endpoint is intentionally open** (no admin/agent password
+  needed) — a guest rating a call has no account to authenticate with,
+  the same reasoning as the password-reset request endpoint below. It
+  only accepts a rating for a call that's actually in the call log, so it
+  can't be used to inject made-up data.
+
 ## Admin dashboard
 
 Open `/admin` and sign in with the admin password (default `letmein`,
@@ -275,11 +352,22 @@ From the dashboard you can:
   browser reconnecting after a Render free-tier cold start — no longer
   drops you back to the sign-in screen.
 - **See performance per agent** — calls handled, total and average talk
-  time, most common call topic, and time of their last call. A summary
-  line at the top shows how many agents are currently online, how many
-  guests are waiting, and how many calls are active right now. The
+  time, most common call topic, hold time (see "Call hold" above), average
+  guest rating (see "Guest ratings" above), and time of their last call. A
+  summary line at the top shows how many agents are currently online, how
+  many guests are waiting, and how many calls are active right now. The
   dashboard refreshes itself every 10 seconds, or click "Refresh" for an
   immediate update.
+- **Drill into one agent's full history** — click any agent's row in
+  Performance to open their complete call log: every call with its date,
+  duration, hold time, any notes the agent took, a **▶ Play recording**
+  link where one exists, and the guest's rating (stars, name, and
+  remarks) where one was given. This is the same data behind the summary
+  row, just unrolled per call — including calls from before these views
+  existed (older entries just won't show hold time or a rating, since
+  neither was tracked yet).
+- **Set video call configuration** — currently just the maximum hold
+  duration; see "Call hold" below.
 
 ### Password resets
 
@@ -331,9 +419,11 @@ below). That's fine for trying things out, but not for actually relying on
 it: a restart, a spin-down (free Render instances sleep after inactivity),
 or your next deploy wipes it clean.
 
-To make agents, the admin password, and call history **permanent —
-surviving restarts and redeploys, with true all-time history** — connect a
-free [Upstash](https://upstash.com) Redis database. It's a small cloud
+To make agents, the admin password, call history, guest ratings, and app
+config (the video call configuration under "Call hold" above)
+**permanent — surviving restarts and redeploys, with true all-time
+history** — connect a free
+[Upstash](https://upstash.com) Redis database. It's a small cloud
 database reached over plain HTTPS, so no extra npm packages are needed, and
 it has a generous free tier that easily covers a single hotel's traffic.
 (Password reset *requests* are the one exception — see "Password resets"
@@ -579,6 +669,7 @@ virtual-front-desk/
 ├── r2.js           Cloudflare R2: signs S3-compatible requests to upload/serve call recordings
 ├── agents.json     Seed/fallback agent passwords/names — real source of truth is Redis once configured
 ├── admin.json      Admin dashboard password (default "letmein" — change this)
+├── config.json     Seed/fallback video call configuration (currently: max hold duration)
 ├── recordings/     Call recordings (.webm) + index.json — local staging always, final home unless R2 is configured (see "Call recordings")
 ├── package.json
 └── public/
