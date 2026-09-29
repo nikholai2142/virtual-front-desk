@@ -50,11 +50,11 @@ html, body {
 }
 .screen.active { display: flex; }
 
-.brand-mark { width: 150px; height: 150px; margin-bottom: 8px; object-fit: contain; }
+.brand-mark { width: 180px; height: 180px; margin-bottom: 1px; object-fit: contain; }
 h1 { font-size: 44px; margin: 0 0 8px; }
 h2 { font-size: 30px; margin: 16px 0 4px; }
 .sub { color: var(--sub); font-size: 18px; margin: 0 0 24px; }
-.footnote { position: absolute; bottom: 32px; color: var(--sub); font-size: 16px; text-align: center; }
+.footnote { margin-top: 32px; color: var(--sub); font-size: 16px; text-align: center; }
 .kiosk-id-footnote { font-size: 13px; opacity: 0.7; }
 
 .start-call-btn {
