@@ -11,6 +11,24 @@ const STORAGE_KEY = 'vfd_admin_password';
 let adminPassword = null;
 let refreshHandle = null;
 
+// The FULL supported-language list — fetched once at load (no auth needed,
+// same endpoint the kiosk and agent dashboard use). This admin page
+// deliberately uses `allLanguages`, not the `languages` field those other
+// two read: they're scoped down to languages some agent is already tagged
+// for (so a guest/transfer never gets offered a dead end), but the admin
+// dashboard is exactly where a property tags its FIRST agent for a new
+// language, so it needs to see every language regardless of who's tagged
+// for what yet.
+let availableLanguages = [{ code: 'en', label: 'English' }];
+(async () => {
+  try {
+    const res = await fetch('/api/call-config');
+    const data = await res.json();
+    if (Array.isArray(data.allLanguages) && data.allLanguages.length) availableLanguages = data.allLanguages;
+    renderAddAgentLanguageOptions();
+  } catch { /* keep the English-only fallback */ }
+})();
+
 const screens = {};
 document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
 function showScreen(id) {
@@ -183,11 +201,19 @@ function renderAgents(agents) {
   agents.forEach((a) => {
     const row = document.createElement('div');
     row.className = 'agent-row';
+    const agentLanguages = Array.isArray(a.languages) && a.languages.length ? a.languages : ['en'];
+    const chipsHtml = availableLanguages.map((l) => {
+      const active = agentLanguages.includes(l.code);
+      return `<button type="button" class="lang-chip${active ? ' active' : ''}" data-code="${escapeHtml(l.code)}">${escapeHtml(l.label)}</button>`;
+    }).join('');
     row.innerHTML = `
-      <div><span class="agent-name">${escapeHtml(a.name)}</span><span class="agent-secret">Password ${escapeHtml(a.password)}</span></div>
-      <button data-id="${escapeHtml(a.id)}">Remove</button>
+      <div class="agent-row-top">
+        <div><span class="agent-name">${escapeHtml(a.name)}</span><span class="agent-secret">Password ${escapeHtml(a.password)}</span></div>
+        <button class="agent-remove-btn" data-id="${escapeHtml(a.id)}">Remove</button>
+      </div>
+      <div class="agent-row-langs">${chipsHtml}</div>
     `;
-    row.querySelector('button').addEventListener('click', async () => {
+    row.querySelector('.agent-remove-btn').addEventListener('click', async () => {
       if (!confirm(`Remove agent "${a.name}"?`)) return;
       try {
         const result = await api(`/api/admin/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' });
@@ -196,6 +222,32 @@ function renderAgents(agents) {
       } catch (err) {
         alert('Could not remove agent: ' + err.message);
       }
+    });
+    // Each chip toggles that language for this agent and saves immediately
+    // — no separate "edit" mode or save button, same immediacy as the rest
+    // of this panel (remove, config changes, etc).
+    row.querySelectorAll('.lang-chip').forEach((chip) => {
+      chip.addEventListener('click', async () => {
+        const code = chip.dataset.code;
+        const next = new Set(agentLanguages);
+        if (next.has(code)) next.delete(code); else next.add(code);
+        if (next.size === 0) {
+          alert('An agent needs at least one language.');
+          return;
+        }
+        chip.disabled = true;
+        try {
+          const result = await api(`/api/admin/agents/${encodeURIComponent(a.id)}/languages`, {
+            method: 'POST',
+            body: JSON.stringify({ languages: [...next] }),
+          });
+          warnIfNotPersisted(result);
+          refreshAll();
+        } catch (err) {
+          alert('Could not update languages: ' + err.message);
+          chip.disabled = false;
+        }
+      });
     });
     list.appendChild(row);
   });
@@ -888,21 +940,41 @@ document.getElementById('btn-refresh-storage').addEventListener('click', loadSto
 
 // ---- Add agent ----
 
+/** (Re)draws the language checkboxes on the Add Agent form — called once availableLanguages loads, since the form exists before that fetch resolves. */
+function renderAddAgentLanguageOptions() {
+  const box = document.getElementById('new-agent-languages');
+  if (!box) return;
+  box.innerHTML = availableLanguages.map((l, i) => `
+    <label class="lang-checkbox">
+      <input type="checkbox" value="${escapeHtml(l.code)}" ${i === 0 ? 'checked' : ''} />
+      ${escapeHtml(l.label)}
+    </label>
+  `).join('');
+}
+renderAddAgentLanguageOptions(); // draws the English-only fallback immediately; re-drawn once the real list loads above
+
 document.getElementById('add-agent-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errEl = document.getElementById('add-agent-error');
   errEl.classList.add('hidden');
   const name = document.getElementById('new-agent-name').value.trim();
   const password = document.getElementById('new-agent-password').value.trim();
+  const languages = [...document.querySelectorAll('#new-agent-languages input:checked')].map((el) => el.value);
   if (!name || !password) {
     errEl.textContent = 'Both name and password are required.';
     errEl.classList.remove('hidden');
     return;
   }
+  if (!languages.length) {
+    errEl.textContent = 'Pick at least one language.';
+    errEl.classList.remove('hidden');
+    return;
+  }
   try {
-    const result = await api('/api/admin/agents', { method: 'POST', body: JSON.stringify({ name, password }) });
+    const result = await api('/api/admin/agents', { method: 'POST', body: JSON.stringify({ name, password, languages }) });
     document.getElementById('new-agent-name').value = '';
     document.getElementById('new-agent-password').value = '';
+    renderAddAgentLanguageOptions();
     warnIfNotPersisted(result);
     refreshAll();
   } catch (err) {

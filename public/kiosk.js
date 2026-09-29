@@ -75,6 +75,26 @@ let micOn = true;
 let camOn = true;
 let connectTimeoutHandle = null;
 
+// ---- Language picker -----------------------------------------------------
+// Fetched once at boot from the server (the source of truth — see
+// SUPPORTED_LANGUAGES in server.js) so this list can never drift out of
+// sync with what agents can actually be tagged for. Falls back to English
+// only if the request fails, so the kiosk still works through a hiccup.
+let availableLanguages = [{ code: 'en', label: 'English' }];
+let currentLanguage = 'en';
+let pendingTopic = null;
+
+async function loadLanguages() {
+  try {
+    const res = await fetch('/api/call-config');
+    const data = await res.json();
+    if (Array.isArray(data.languages) && data.languages.length) availableLanguages = data.languages;
+  } catch (err) {
+    console.warn('Could not fetch language list, defaulting to English only:', err);
+  }
+}
+loadLanguages();
+
 // ---- Post-call rating ----
 let currentCallId = null;
 let currentAgentName = null;
@@ -113,6 +133,7 @@ async function handleServerMessage(msg) {
   switch (msg.type) {
     case 'queued':
       currentCallId = msg.callId;
+      document.getElementById('waiting-title').textContent = 'Connecting you to the next available agent…';
       showScreen('screen-waiting');
       document.getElementById('waiting-topic').textContent = currentTopic;
       waitStartedAt = Date.now();
@@ -139,6 +160,22 @@ async function handleServerMessage(msg) {
 
     case 'call-resumed':
       document.getElementById('hold-overlay').classList.add('hidden');
+      break;
+
+    // The agent on the call just handed it back into the queue for someone
+    // else to pick up (see agent.js's Transfer button) — the guest never
+    // hung up, so this tears down the peer connection to the outgoing
+    // agent (without touching the camera/mic, which stay live) and shows
+    // the same waiting UI as the original wait, just reworded, until the
+    // next agent answers and a fresh 'call-accepted' arrives.
+    case 'call-transferring':
+      stopCallTimer();
+      teardownPeerConnectionOnly();
+      document.getElementById('waiting-title').textContent = 'Connecting you to another agent…';
+      document.getElementById('waiting-topic').textContent = currentTopic;
+      waitStartedAt = Date.now();
+      showScreen('screen-waiting');
+      startWaitTimer();
       break;
 
     case 'call-ended':
@@ -251,6 +288,7 @@ async function handleSignal(signalType, data) {
 }
 
 async function startPeerConnection() {
+  if (pc) { pc.close(); pc = null; } // defensive — should already be null (see teardownPeerConnectionOnly)
   const iceServers = await getIceServers();
   pc = new RTCPeerConnection({ iceServers });
 
@@ -294,8 +332,32 @@ function failConnection() {
   );
 }
 
-async function requestMediaAndJoin(topic) {
+// Shown after "Start Video Call", before camera permission — lets the guest
+// pick a language so the queue can route (or later transfer) them to an
+// agent who speaks it. Skipped automatically when only one language is
+// configured, so a single-language property sees no extra tap.
+function maybeShowLanguageScreen(topic) {
+  pendingTopic = topic;
+  if (availableLanguages.length <= 1) {
+    requestMediaAndJoin(topic, availableLanguages[0] ? availableLanguages[0].code : 'en');
+    return;
+  }
+  const list = document.getElementById('language-list');
+  list.innerHTML = '';
+  availableLanguages.forEach((lang) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'language-btn';
+    btn.textContent = lang.label;
+    btn.addEventListener('click', () => requestMediaAndJoin(topic, lang.code));
+    list.appendChild(btn);
+  });
+  showScreen('screen-language');
+}
+
+async function requestMediaAndJoin(topic, language) {
   currentTopic = topic;
+  currentLanguage = language || 'en';
   showScreen('screen-connecting');
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -310,7 +372,7 @@ async function requestMediaAndJoin(topic) {
 
   try {
     if (!ws || ws.readyState !== WebSocket.OPEN) await connectWS();
-    wsSend({ type: 'join-queue', topic, kioskId });
+    wsSend({ type: 'join-queue', topic, kioskId, language: currentLanguage });
   } catch {
     showError('Can’t reach the front desk', 'Please try again in a moment.');
   }
@@ -359,6 +421,21 @@ function cleanupCall() {
   document.getElementById('hold-overlay').classList.add('hidden');
 }
 
+/**
+ * Closes just the WebRTC peer connection to the current agent, leaving the
+ * camera/mic (localStream) running — used for a transfer, where the guest
+ * is about to be connected to a DIFFERENT agent and shouldn't have to
+ * re-grant camera/mic permission (or see the picture flicker off) for a
+ * call they never actually ended. startPeerConnection() builds a fresh
+ * `pc` from the same localStream once the next agent answers.
+ */
+function teardownPeerConnectionOnly() {
+  clearTimeout(connectTimeoutHandle);
+  pendingIceCandidates = [];
+  if (pc) { pc.close(); pc = null; }
+  document.getElementById('hold-overlay').classList.add('hidden');
+}
+
 function showError(title, message) {
   document.getElementById('error-title').textContent = title;
   document.getElementById('error-message').textContent = message;
@@ -372,7 +449,12 @@ function resetToIdle() {
 
 // ---- UI wiring ----
 document.getElementById('btn-start-call').addEventListener('click', (e) => {
-  requestMediaAndJoin(e.currentTarget.dataset.topic);
+  maybeShowLanguageScreen(e.currentTarget.dataset.topic);
+});
+
+document.getElementById('btn-cancel-language').addEventListener('click', () => {
+  pendingTopic = null;
+  showScreen('screen-idle');
 });
 
 document.getElementById('kiosk-setup-form').addEventListener('submit', (e) => {

@@ -31,6 +31,10 @@ let remoteStream = null;
 let currentCallId = null;
 let currentTopic = null;
 let currentKioskId = null;
+let currentLanguageLabel = null;
+let currentTransferredFrom = null;
+let currentTransferNote = null;
+let availableLanguages = [{ code: 'en', label: 'English' }]; // refreshed from the server, see refreshCallConfig()
 let callStartedAt = null;
 let callTimerHandle = null;
 let noteDebounce = null;
@@ -285,6 +289,7 @@ function handleServerMessage(msg) {
       showScreen('screen-dashboard');
       wsSend({ type: 'get-log' });
       wsSend({ type: 'get-chats' });
+      refreshCallConfig(); // so the language list is ready before the first call, not just after answering one
       break;
 
     case 'agent-login-fail':
@@ -308,6 +313,12 @@ function handleServerMessage(msg) {
     case 'answer-failed':
       if (msg.reason === 'already-on-a-call') {
         alert("You're already on a call in another session (another tab, phone, or browser signed in as you) — end that one before answering here.");
+      } else if (msg.reason === 'language-mismatch') {
+        // Shouldn't normally happen — the queue this agent sees is already
+        // filtered to calls they're tagged for — but the queue can shift
+        // between render and click (e.g. someone else just answered it and
+        // requeued it with a different language), so handle it gracefully.
+        alert("That call needs a language you're not tagged for.");
       } else {
         alert('That call was already answered by another agent.');
       }
@@ -318,6 +329,9 @@ function handleServerMessage(msg) {
       currentCallId = msg.callId;
       currentTopic = msg.topic;
       currentKioskId = msg.kioskId;
+      currentLanguageLabel = msg.languageLabel || null;
+      currentTransferredFrom = msg.transferredFrom || null;
+      currentTransferNote = msg.transferNote || null;
       updateRingingState();
       startAsAnswerer();
       break;
@@ -356,6 +370,15 @@ function handleServerMessage(msg) {
       // specifically when the agent clicked "End Call" themselves: that
       // button already clears currentCallId locally for instant UI
       // feedback, so by the time this echo arrived the check always failed.)
+      endActiveCallUI();
+      wsSend({ type: 'get-log' });
+      break;
+
+    case 'call-transferred':
+      // Ack of this agent's own Transfer action (see the transfer-form
+      // submit handler below, which sent transfer-call and is now waiting
+      // to hear back before tearing down the UI — see that handler's
+      // comment for why this doesn't happen optimistically like End Call).
       endActiveCallUI();
       wsSend({ type: 'get-log' });
       break;
@@ -502,8 +525,12 @@ function renderQueue(queue) {
   queue.forEach((item) => {
     const div = document.createElement('div');
     div.className = 'queue-item';
+    const transferNoteHtml = item.transferNote
+      ? `<div class="qi-transfer-note">↪ from ${escapeHtml(item.transferredFrom || 'another agent')}: “${escapeHtml(item.transferNote)}”</div>`
+      : (item.transferredFrom ? `<div class="qi-transfer-note">↪ transferred from ${escapeHtml(item.transferredFrom)}</div>` : '');
     div.innerHTML = `
-      <div class="qi-top"><strong>${escapeHtml(item.topic)}</strong><span class="qi-kiosk">${escapeHtml(item.kioskId || '')}</span></div>
+      <div class="qi-top"><strong>${escapeHtml(item.topic)}</strong><span class="qi-lang">${escapeHtml(item.languageLabel || '')}</span><span class="qi-kiosk">${escapeHtml(item.kioskId || '')}</span></div>
+      ${transferNoteHtml}
       <div class="qi-wait" data-queued-at="${item.queuedAt}">waiting…</div>
       <button data-call-id="${item.callId}">Answer</button>
     `;
@@ -562,13 +589,14 @@ function formatMMSS(totalSeconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Fetches the admin-configured max hold duration (no auth needed — see server.js). Best-effort: keeps the last known value on failure. */
+/** Fetches the admin-configured max hold duration and the supported-language list (no auth needed — see server.js). Best-effort: keeps the last known values on failure. */
 async function refreshCallConfig() {
   try {
     const res = await fetch('/api/call-config');
     const data = await res.json();
     if (Number.isFinite(data.maxHoldSeconds)) configuredMaxHoldSeconds = data.maxHoldSeconds;
-  } catch { /* keep the previous value */ }
+    if (Array.isArray(data.languages) && data.languages.length) availableLanguages = data.languages;
+  } catch { /* keep the previous values */ }
   const holdBtn = document.getElementById('btn-toggle-hold');
   if (holdBtn && !onHold) holdBtn.title = `Put call on hold (auto-resumes after ${formatMMSS(configuredMaxHoldSeconds)})`;
 }
@@ -662,6 +690,22 @@ function handleHoldResumed(reason) {
 
 async function startAsAnswerer() {
   document.getElementById('call-topic-label').textContent = currentKioskId ? `${currentTopic} · ${currentKioskId}` : currentTopic;
+  const langBadge = document.getElementById('call-language-badge');
+  if (currentLanguageLabel) {
+    langBadge.textContent = currentLanguageLabel;
+    langBadge.classList.remove('hidden');
+  } else {
+    langBadge.classList.add('hidden');
+  }
+  const transferBanner = document.getElementById('transfer-context');
+  if (currentTransferredFrom) {
+    transferBanner.textContent = currentTransferNote
+      ? `Transferred from ${currentTransferredFrom}: “${currentTransferNote}”`
+      : `Transferred from ${currentTransferredFrom}`;
+    transferBanner.classList.remove('hidden');
+  } else {
+    transferBanner.classList.add('hidden');
+  }
   document.getElementById('no-call-placeholder').classList.add('hidden');
   document.getElementById('active-call').classList.remove('hidden');
   document.getElementById('call-notes').value = '';
@@ -944,6 +988,9 @@ function endActiveCallUI() {
   currentCallId = null;
   currentTopic = null;
   currentKioskId = null;
+  currentLanguageLabel = null;
+  currentTransferredFrom = null;
+  currentTransferNote = null;
   micOn = true; camOn = true;
   document.getElementById('active-call').classList.add('hidden');
   document.getElementById('no-call-placeholder').classList.remove('hidden');
@@ -995,6 +1042,42 @@ document.getElementById('btn-toggle-hold').addEventListener('click', (e) => {
   } else {
     wsSend({ type: 'hold-call', callId: currentCallId });
   }
+});
+
+// ---- Transfer call ----
+
+document.getElementById('btn-open-transfer').addEventListener('click', () => {
+  if (!currentCallId) return;
+  const select = document.getElementById('transfer-language');
+  select.innerHTML = availableLanguages.map((l) => `<option value="${escapeHtml(l.code)}">${escapeHtml(l.label)}</option>`).join('');
+  // Default to whatever language this call is currently tagged with, if it's
+  // in the list — the common case is transferring for a REASON OTHER than
+  // language (e.g. the guest needs a manager), where the language shouldn't
+  // change at all.
+  const currentCode = availableLanguages.find((l) => l.label === currentLanguageLabel);
+  if (currentCode) select.value = currentCode.code;
+  document.getElementById('transfer-note').value = '';
+  document.getElementById('transfer-error').classList.add('hidden');
+  document.getElementById('transfer-modal').classList.remove('hidden');
+});
+
+document.getElementById('btn-cancel-transfer').addEventListener('click', () => {
+  document.getElementById('transfer-modal').classList.add('hidden');
+});
+
+document.getElementById('transfer-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (!currentCallId) return;
+  const language = document.getElementById('transfer-language').value;
+  const note = document.getElementById('transfer-note').value.trim();
+  // Optimistic UI (like End Call) would leave this agent's screen showing
+  // "no active call" even if the transfer somehow didn't go through server
+  // side — instead this waits for the server's 'call-transferred' ack (see
+  // handleServerMessage) to actually tear the UI down, so a failure just
+  // leaves the call as-is rather than silently losing it from this agent's
+  // screen while it's still theirs.
+  wsSend({ type: 'transfer-call', callId: currentCallId, language, note });
+  document.getElementById('transfer-modal').classList.add('hidden');
 });
 
 function updateRingToggleButton() {

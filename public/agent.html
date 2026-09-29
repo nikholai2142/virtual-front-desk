@@ -83,6 +83,7 @@
           <div class="call-meta">
             <div>
               <strong id="call-topic-label">—</strong>
+              <span id="call-language-badge" class="language-badge hidden"></span>
               <span id="call-timer-label">0:00</span>
               <span id="recording-indicator" class="recording-indicator hidden" title="This call is being recorded">🔴 REC</span>
               <span id="hold-badge" class="hold-badge hidden">⏸ ON HOLD</span>
@@ -91,9 +92,11 @@
               <button id="btn-toggle-mic" class="ctrl-btn" title="Mute/unmute">🎤</button>
               <button id="btn-toggle-cam" class="ctrl-btn" title="Camera on/off">📷</button>
               <button id="btn-toggle-hold" class="ctrl-btn" title="Put call on hold">⏸ Hold</button>
+              <button id="btn-open-transfer" class="ctrl-btn" title="Transfer to another agent">↪ Transfer</button>
               <button id="btn-end-call" class="ctrl-btn ctrl-end" title="End call">End Call</button>
             </div>
           </div>
+          <p id="transfer-context" class="transfer-context hidden"></p>
           <textarea id="call-notes" placeholder="Notes for this call (saved automatically)…"></textarea>
         </div>
       </section>
@@ -151,6 +154,27 @@
       <div class="modal-actions">
         <button type="button" id="btn-cancel-change-password" class="btn btn-secondary">Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- TRANSFER CALL -->
+  <div id="transfer-modal" class="modal-overlay hidden">
+    <form id="transfer-form" class="modal-card">
+      <h2>Transfer this call</h2>
+      <p class="sub">The guest stays connected — they'll see a brief "connecting you to another agent" wait while it goes back into the queue.</p>
+      <div class="modal-field">
+        <label for="transfer-language">Language needed</label>
+        <select id="transfer-language"></select>
+      </div>
+      <div class="modal-field">
+        <label for="transfer-note">Note for the next agent (optional)</label>
+        <textarea id="transfer-note" maxlength="500" rows="3" placeholder="e.g. guest is asking about a late checkout"></textarea>
+      </div>
+      <p id="transfer-error" class="error hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-transfer" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Transfer</button>
       </div>
     </form>
   </div>

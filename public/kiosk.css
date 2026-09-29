@@ -127,6 +127,17 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 .btn-primary { background: var(--accent); color: white; }
 .btn-ghost { background: transparent; color: var(--sub); border: 1px solid #2a3a5c; }
 
+.language-list {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 12px;
+  max-width: 560px; margin: 8px 0 20px;
+}
+.language-btn {
+  background: var(--panel); color: var(--text); border: 1px solid #223255;
+  border-radius: 14px; padding: 18px 28px; font-size: 18px; font-weight: 600;
+  cursor: pointer; min-width: 130px;
+}
+.language-btn:active { background: var(--accent); border-color: var(--accent); transform: scale(0.97); }
+
 .check-mark {
   width: 72px; height: 72px; border-radius: 50%;
   background: var(--good); color: #06210f;

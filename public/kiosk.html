@@ -39,6 +39,19 @@
     </p>
   </section>
 
+  <!-- LANGUAGE: guest picks which language to be connected in, so the
+       queue can route them to (or transfer them to) an agent who speaks
+       it. Skipped automatically if only one language is configured — see
+       kiosk.js's maybeShowLanguageScreen(). -->
+  <section id="screen-language" class="screen">
+    <div class="center-card">
+      <h2>What language do you speak?</h2>
+      <p class="sub">We'll connect you with an agent who speaks it.</p>
+      <div id="language-list" class="language-list"></div>
+      <button id="btn-cancel-language" class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
   <!-- PERMISSION / CONNECTING -->
   <section id="screen-connecting" class="screen">
     <div class="center-card">
@@ -49,11 +62,13 @@
     </div>
   </section>
 
-  <!-- WAITING FOR AGENT -->
+  <!-- WAITING FOR AGENT (also reused mid-call for a transfer's brief
+       "connecting you to another agent" wait — see kiosk.js's handling of
+       the 'call-transferring' server message) -->
   <section id="screen-waiting" class="screen">
     <div class="center-card">
       <div class="spinner" aria-hidden="true"></div>
-      <h2>Connecting you to the next available agent…</h2>
+      <h2 id="waiting-title">Connecting you to the next available agent…</h2>
       <p class="sub"><span id="waiting-topic"></span> · waiting <span id="waiting-time">0:00</span></p>
       <p id="waiting-warning" class="warning hidden">This is taking longer than usual. You're welcome to keep waiting, or dial <strong>0</strong> from a house phone.</p>
       <button id="btn-cancel-waiting" class="btn btn-ghost">Cancel</button>

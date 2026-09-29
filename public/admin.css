@@ -159,16 +159,24 @@ html, body {
 
 .agents-list { display: flex; flex-direction: column; gap: 8px; }
 .agent-row {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 14px;
 }
+.agent-row-top { display: flex; align-items: center; justify-content: space-between; }
 .agent-row .agent-name { font-weight: 600; }
 .agent-row .agent-secret { color: var(--sub); font-size: 13px; margin-left: 10px; }
-.agent-row button {
+.agent-row .agent-remove-btn {
   background: transparent; color: var(--danger); border: 1px solid var(--border);
   border-radius: 8px; padding: 5px 12px; font-size: 12px; cursor: pointer;
 }
+.agent-row-langs { display: flex; flex-wrap: wrap; gap: 6px; }
+.lang-chip {
+  background: transparent; color: var(--sub); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer;
+}
+.lang-chip.active { background: var(--accent); color: white; border-color: var(--accent); }
+.lang-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 .empty-note { color: var(--sub); font-size: 13px; }
 
 .add-agent-row { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -181,6 +189,10 @@ html, body {
 .add-agent-row button {
   flex: 0 0 auto; width: auto; white-space: nowrap; padding: 10px 20px;
 }
+
+.lang-checkbox-row { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 12px; }
+.lang-checkbox { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--sub); cursor: pointer; }
+.lang-checkbox input { margin: 0; }
 
 .stats-note { color: var(--sub); font-size: 12px; margin: 0 0 4px; }
 .stats-hint { color: var(--sub); font-size: 12px; margin: 0 0 14px; opacity: 0.8; }

@@ -420,6 +420,61 @@ long as the hold lasts.
 - A call can be held and resumed any number of times; the times add up
   across the whole call for stats purposes.
 
+## Multi-language support & call transfer
+
+A guest picks their language on the kiosk before a call starts, and an
+agent who can't help can hand the call to one who can — without the guest
+ever hanging up.
+
+- **The kiosk asks which language the guest speaks** right after "Start
+  Video Call", as a row of big buttons, before it requests camera access.
+  **The picker only offers languages at least one agent on the roster is
+  actually tagged for** — not the full fixed list below — so a guest is
+  never offered a language nobody could ever pick up in the first place.
+  This is based on the agent roster, not who's online at that exact
+  moment, so it doesn't flicker as people sign in and out over a shift. If
+  only one language qualifies (a single-language property, or one that
+  just hasn't added a second-language agent yet), this screen is skipped
+  automatically and that language is used — no extra tap.
+- **Agents are tagged with the language(s) they take calls in** (User
+  Management, above) — an agent tagged only "Spanish" only sees Spanish
+  calls in their queue; an agent tagged both "English" and "Spanish" sees
+  both. **If nobody currently online is tagged for a language at all, that
+  call is shown to every agent instead** — a guest is never stranded in
+  the queue just because nobody on shift happens to be tagged for the
+  language they picked.
+- **An agent on a call can transfer it** with the **↪ Transfer** button
+  next to Hold — pick the language the guest actually needs and optionally
+  leave a short note for whoever picks it up (e.g. *"guest is asking about
+  a late checkout"*). The guest is **never disconnected**: they see a
+  brief "connecting you to another agent" wait (the same screen as their
+  original wait) while the call goes back into the queue — filtered to
+  agents who speak the target language, and ahead of anyone else already
+  waiting, since this guest has already waited once. Once the next agent
+  answers, the video reconnects automatically.
+- **The next agent sees the full handoff context** — who transferred it
+  and the note they left — right on their call screen, and the same
+  context shows on the queue item before they even answer it.
+- **Both legs are tracked separately in call history and agent stats** —
+  the outgoing agent's segment is recorded as a completed call
+  (outcome "transferred", not "ended"), and the agent who eventually
+  closes it out gets their own separate entry. Nothing about a transfer
+  is invisible in the Agent Performance numbers.
+- **The supported language list is a fixed set** you edit directly in
+  `server.js` (the `SUPPORTED_LANGUAGES` array near the top) — it's the
+  single source of truth every client reads from `/api/call-config`, so
+  there's no separate list to keep in sync. Ships with English, Spanish,
+  French, German, Mandarin, Japanese, Korean, Arabic, Portuguese, Russian,
+  Italian, and Hindi; add, remove, or rename entries there to match your
+  property. `/api/call-config` actually exposes two versions of it: the
+  full fixed list (`allLanguages`, what the admin dashboard's language
+  checkboxes/chips use, so you can tag a first-of-its-kind language) and
+  the roster-scoped one (`languages`, what the kiosk picker and an agent's
+  Transfer-target dropdown use, as described above).
+- **Agents created before this feature existed** are migrated to the base
+  language (English by default) the first time the server starts after
+  upgrading, so nobody's calls silently stop routing to them.
+
 ## Guest ratings
 
 After a call ends, the kiosk asks the guest to rate it — a quick way to
@@ -532,12 +587,15 @@ in the selected range shows a row with **0 calls** rather than disappearing.
 Agent accounts and password resets, previously mixed in with everything
 else:
 
-- **Add an agent** — enter a name and a password (at least 4 characters,
-  letters/numbers/symbols all fine); it's added to the agent list
-  immediately (agents can sign in at `/agent` right away, no restart
-  needed).
+- **Add an agent** — enter a name, a password (at least 4 characters,
+  letters/numbers/symbols all fine), and tick which language(s) they take
+  calls in; it's added to the agent list immediately (agents can sign in
+  at `/agent` right away, no restart needed).
 - **Remove an agent** — click "Remove" on any agent's row (asks for
   confirmation first).
+- **Change an agent's language(s)** — click any language chip on their row
+  to toggle it on/off; saves immediately, no separate edit mode. See
+  "Multi-language support & call transfer" below.
 - **Handle password reset requests** — see "Password resets" below. A red
   badge on the User Management tab itself, not just inside the page, shows
   when one is waiting so it's hard to miss even from another page.

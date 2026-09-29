@@ -60,6 +60,14 @@ function migrateAgentRecords(agents) {
       changed = true;
     }
     if ('pin' in next) { delete next.pin; changed = true; }
+    // Agents created before multi-language support default to the base
+    // language — this runs at startup (see main()), so an agent who could
+    // take every call before this feature existed still can afterward,
+    // rather than silently going quiet because nothing is tagged.
+    if (!Array.isArray(next.languages) || !next.languages.length) {
+      next.languages = [DEFAULT_LANGUAGE];
+      changed = true;
+    }
     return next;
   });
   return { agents: migrated, changed };
@@ -75,6 +83,38 @@ async function saveAgents() {
     console.error('Could not write agents.json locally (non-fatal):', err.message);
   }
   return store.persistAgents(AGENTS);
+}
+
+// ---- Languages -----------------------------------------------------------
+// A fixed list a hotel picks from when tagging an agent's language(s) and
+// when a guest picks theirs on the kiosk. Edit this list to match your
+// property's needs — it's the single source of truth for every client
+// (served over /api/call-config, so kiosk.js/agent.js/admin.js never need
+// their own copy and can't drift out of sync with it).
+const SUPPORTED_LANGUAGES = [
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'zh', label: 'Mandarin' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'ko', label: 'Korean' },
+  { code: 'ar', label: 'Arabic' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'ru', label: 'Russian' },
+  { code: 'it', label: 'Italian' },
+  { code: 'hi', label: 'Hindi' },
+];
+const SUPPORTED_LANGUAGE_CODES = new Set(SUPPORTED_LANGUAGES.map((l) => l.code));
+const DEFAULT_LANGUAGE = 'en';
+function languageLabel(code) {
+  const entry = SUPPORTED_LANGUAGES.find((l) => l.code === code);
+  return entry ? entry.label : code;
+}
+/** Filters+dedupes a client-supplied language list down to only recognized codes. */
+function normalizeLanguages(input) {
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input.filter((c) => SUPPORTED_LANGUAGE_CODES.has(c)))];
 }
 
 // ---- Admin dashboard auth ---------------------------------------------
@@ -386,15 +426,24 @@ function serveStatic(req, res) {
 let nextCallId = 1;
 /**
  * callId -> {
- *   topic, kioskId, guestConn, agentConn, agentId, agentName,
+ *   topic, kioskId, language, guestConn, agentConn, agentId, agentName,
  *   queuedAt, answeredAt, notes,
  *   onHold, holdStartedAt, holdSecondsTotal, holdCount, holdWarnTimer, holdExpireTimer,
+ *   transferredFrom, transferNote, transferCount,
  * }
  * The hold fields track HOLD (see "Call hold" section below): whether the
  * call is on hold right now, when the current hold began, accumulated hold
  * seconds across every hold during this call (added to holdSecondsTotal
  * each time a hold ends), how many times it's been put on hold, and the
  * two scheduled timers (30s warning + auto-resume) for the hold in progress.
+ *
+ * The transfer fields (see "Call transfer" section below) carry context
+ * from the last transfer, if any: which agent handed the call off, the
+ * note they left, and how many times this call has been transferred in
+ * total. `language` is the guest's picked language — normally fixed for
+ * the life of the call, but a transfer can change it (e.g. the answering
+ * agent realizes the guest actually needs a different language than they
+ * initially picked).
  */
 const calls = new Map();
 /** ordered array of callIds waiting for an agent */
@@ -429,12 +478,44 @@ function findAgentByName(name) {
   return AGENTS.find((a) => a.name.trim().toLowerCase() === norm);
 }
 
+/** The agent record for a logged-in agent connection (conn.agentId is set at login — see handleAgentConnection). */
+function agentRecordFor(conn) {
+  return AGENTS.find((a) => a.id === conn.agentId);
+}
+
+/** An agent's language tags, defaulting to the base language for a record that somehow has none (shouldn't happen post-migration, but keeps this safe). */
+function agentLanguages(conn) {
+  const agent = agentRecordFor(conn);
+  return (agent && Array.isArray(agent.languages) && agent.languages.length) ? agent.languages : [DEFAULT_LANGUAGE];
+}
+
+/**
+ * Whether `call` should be shown to (and answerable by) the agent on `conn`.
+ * Normally that's just a language match. But if NOT ONE currently-connected
+ * agent speaks the call's language, it's shown to everyone instead — a
+ * guest should never be stranded in the queue forever just because nobody
+ * on shift happens to be tagged for the language they picked.
+ */
+function queueVisibleTo(call, conn) {
+  if (agentLanguages(conn).includes(call.language)) return true;
+  return ![...agentConns].some((a) => agentLanguages(a).includes(call.language));
+}
+
 function broadcastQueue() {
-  const snapshot = queue.map((callId) => {
-    const c = calls.get(callId);
-    return { callId, topic: c.topic, kioskId: c.kioskId, queuedAt: c.queuedAt };
-  });
   for (const a of agentConns) {
+    const snapshot = queue
+      .map((callId) => ({ callId, c: calls.get(callId) }))
+      .filter(({ c }) => c && queueVisibleTo(c, a))
+      .map(({ callId, c }) => ({
+        callId,
+        topic: c.topic,
+        kioskId: c.kioskId,
+        queuedAt: c.queuedAt,
+        language: c.language,
+        languageLabel: languageLabel(c.language),
+        transferredFrom: c.transferredFrom || null,
+        transferNote: c.transferNote || null,
+      }));
     a.send({ type: 'queue-update', queue: snapshot });
   }
 }
@@ -531,6 +612,7 @@ function endCall(callId, reason) {
       callId,
       topic: call.topic,
       kioskId: call.kioskId,
+      language: call.language,
       agentId: call.agentId || null,
       agentName: call.agentName || null,
       queuedAt: call.queuedAt,
@@ -540,6 +622,7 @@ function endCall(callId, reason) {
       outcome: reason,
       holdSeconds: call.holdSecondsTotal || 0,
       holdCount: call.holdCount || 0,
+      transferredFrom: call.transferredFrom || null,
     };
     callLog.push(entry);
     // Without Redis, history is memory-only, so keep it bounded like before.
@@ -571,6 +654,7 @@ function endCall(callId, reason) {
       callId,
       topic: call.topic,
       kioskId: call.kioskId,
+      language: call.language,
       queuedAt: call.queuedAt,
       endedAt: Date.now(),
       outcome: reason,
@@ -578,6 +662,87 @@ function endCall(callId, reason) {
     missedCallLog.push(entry);
     if (!store.configured && missedCallLog.length > LOCAL_ONLY_CALL_LOG_LIMIT) missedCallLog.shift();
     store.appendMissedCallEntry(entry).catch(() => {});
+  }
+  broadcastQueue();
+}
+
+// ======================================================================
+// Call transfer — an agent on an active call can hand it back into the
+// queue instead of ending it: the guest never hangs up, they just see a
+// "connecting you to another agent" wait (same as their original wait,
+// see kiosk.js's 'call-transferring' handler) while the call goes back
+// into the queue, filtered to agents who speak the (possibly corrected)
+// target language, with a short note for whoever picks it up next. This
+// deliberately reuses the *answer* path (answer-call / call-assigned /
+// call-accepted) rather than inventing a parallel one — a transferred
+// call re-enters the queue exactly like a fresh one, just further along.
+// ======================================================================
+
+function transferCall(callId, { note, language, fromAgentName }) {
+  const call = calls.get(callId);
+  if (!call) return;
+  clearHoldTimers(call);
+  accumulateHoldTime(call); // in case the call was on hold when transferred
+
+  // Log the outgoing agent's segment now, the same shape endCall() uses for
+  // a normally-ended answered call, so Agent Performance / Recent Calls
+  // credit them for the time they actually spent — outcome:'transferred'
+  // distinguishes it from a call they saw through to the end themselves.
+  if (call.answeredAt) {
+    const entry = {
+      callId,
+      topic: call.topic,
+      kioskId: call.kioskId,
+      language: call.language,
+      agentId: call.agentId || null,
+      agentName: call.agentName || null,
+      queuedAt: call.queuedAt,
+      answeredAt: call.answeredAt,
+      endedAt: Date.now(),
+      notes: call.notes || '',
+      outcome: 'transferred',
+      holdSeconds: call.holdSecondsTotal || 0,
+      holdCount: call.holdCount || 0,
+      transferredFrom: call.transferredFrom || null,
+    };
+    callLog.push(entry);
+    if (!store.configured && callLog.length > LOCAL_ONLY_CALL_LOG_LIMIT) callLog.shift();
+    store.appendCallLogEntry(entry).catch(() => {});
+  }
+
+  const outgoingAgentConn = call.agentConn;
+
+  // Reset the call back to "waiting for an agent" — notes, hold stats, and
+  // the wait clock all start fresh for this next leg (the segment that just
+  // ended already captured its own copies above), while the transfer
+  // context carries forward so the next agent has it.
+  call.language = SUPPORTED_LANGUAGE_CODES.has(language) ? language : call.language;
+  call.transferredFrom = fromAgentName;
+  call.transferNote = note || null;
+  call.transferCount = (call.transferCount || 0) + 1;
+  call.agentConn = null;
+  call.agentId = null;
+  call.agentName = null;
+  call.answeredAt = null;
+  call.queuedAt = Date.now();
+  call.notes = '';
+  call.onHold = false;
+  call.holdStartedAt = null;
+  call.holdSecondsTotal = 0;
+  call.holdCount = 0;
+
+  // Unshift, not push — this guest already waited once; a transfer isn't
+  // supposed to send them back to the end of the line.
+  queue.unshift(callId);
+
+  if (call.guestConn && call.guestConn.alive) {
+    call.guestConn.send({ type: 'call-transferring' });
+  }
+  if (outgoingAgentConn && outgoingAgentConn.alive) {
+    outgoingAgentConn.send({ type: 'call-transferred', callId });
+  }
+  for (const a of agentConns) {
+    a.send({ type: 'call-log-changed' });
   }
   broadcastQueue();
 }
@@ -893,7 +1058,22 @@ function readRawBody(req) {
 // ======================================================================
 
 function handleCallConfig(req, res) {
-  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds });
+  // `languages` is scoped to what's actually usable right now — only
+  // languages at least one configured agent is tagged for (not just who's
+  // currently online: an agent who's briefly signed off still counts, so
+  // this doesn't flicker as people log in and out). This is what the kiosk's
+  // language picker and an agent's Transfer-target dropdown show, since
+  // offering a language nobody on the roster speaks would be a dead end.
+  // `allLanguages` is the full fixed list regardless of who's tagged for
+  // what — the admin dashboard needs that one, so a property can tag its
+  // first agent for a brand-new language rather than being unable to.
+  const activeCodes = new Set();
+  for (const a of AGENTS) {
+    if (Array.isArray(a.languages)) for (const code of a.languages) activeCodes.add(code);
+  }
+  let languages = SUPPORTED_LANGUAGES.filter((l) => activeCodes.has(l.code));
+  if (!languages.length) languages = SUPPORTED_LANGUAGES.filter((l) => l.code === DEFAULT_LANGUAGE); // safety net if somehow no agent has any language tagged (e.g. every agent was just deleted)
+  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds, languages, allLanguages: SUPPORTED_LANGUAGES });
 }
 
 async function handleTurnCredentials(req, res) {
@@ -1354,9 +1534,10 @@ async function handleAdminApi(req, res, urlObj) {
     if (!name || !password) { sendJson(res, 400, { error: 'name and password are both required' }); return; }
     if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
     if (AGENTS.some((a) => a.password === password)) { sendJson(res, 409, { error: 'that password is already in use' }); return; }
-    AGENTS.push({ id: crypto.randomUUID(), name, password });
+    const languages = normalizeLanguages(body.languages);
+    AGENTS.push({ id: crypto.randomUUID(), name, password, languages: languages.length ? languages : [DEFAULT_LANGUAGE] });
     const persisted = await saveAgents();
-    sendJson(res, 201, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    sendJson(res, 201, { agents: AGENTS, persisted, persistenceConfigured: store.configured, languages: SUPPORTED_LANGUAGES });
     return;
   }
 
@@ -1366,6 +1547,25 @@ async function handleAdminApi(req, res, urlObj) {
     const before = AGENTS.length;
     AGENTS = AGENTS.filter((a) => a.id !== id);
     if (AGENTS.length === before) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
+    const persisted = await saveAgents();
+    sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  // Update which language(s) an agent is tagged for — a separate endpoint
+  // (rather than folding into a general agent-edit one, which doesn't exist
+  // yet) so the admin dashboard's per-agent language chips can save with a
+  // single, focused request the moment one is toggled.
+  const languagesMatch = urlObj.pathname.match(/^\/api\/admin\/agents\/([^/]+)\/languages$/);
+  if (languagesMatch && req.method === 'POST') {
+    const id = decodeURIComponent(languagesMatch[1]);
+    const agent = AGENTS.find((a) => a.id === id);
+    if (!agent) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const languages = normalizeLanguages(body.languages);
+    if (!languages.length) { sendJson(res, 400, { error: 'at least one language is required' }); return; }
+    agent.languages = languages;
     const persisted = await saveAgents();
     sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
     return;
@@ -1585,12 +1785,16 @@ function handleGuestConnection(conn) {
       calls.set(callId, {
         topic: (msg.topic || 'General').slice(0, 60),
         kioskId: String(msg.kioskId || '').trim().slice(0, 40) || 'Unnamed kiosk',
+        language: SUPPORTED_LANGUAGE_CODES.has(msg.language) ? msg.language : DEFAULT_LANGUAGE,
         guestConn: conn,
         agentConn: null,
         agentName: null,
         queuedAt: Date.now(),
         answeredAt: null,
         notes: '',
+        transferredFrom: null,
+        transferNote: null,
+        transferCount: 0,
       });
       queue.push(callId);
       conn.send({ type: 'queued', callId, position: queue.indexOf(callId) + 1 });
@@ -1646,6 +1850,7 @@ function handleAgentConnection(conn) {
       }
       agentName = match.name;
       agentId = match.id;
+      conn.agentId = agentId; // readable from outside this closure — see agentLanguages()/broadcastQueue()
       agentConns.add(conn);
       conn.send({ type: 'agent-login-ok', name: agentName });
       broadcastQueue();
@@ -1683,6 +1888,16 @@ function handleAgentConnection(conn) {
         conn.send({ type: 'answer-failed', callId, reason: 'already-taken' });
         return;
       }
+      // Defense in depth: the queue this agent was actually shown already
+      // excludes calls in a language they don't speak (see broadcastQueue's
+      // per-agent filtering / queueVisibleTo), but a stale client-side
+      // queue snapshot (or a hand-crafted message) could still name a
+      // callId this agent shouldn't be offered — re-check server-side
+      // rather than trusting the client.
+      if (!queueVisibleTo(call, conn)) {
+        conn.send({ type: 'answer-failed', callId, reason: 'language-mismatch' });
+        return;
+      }
       // The queue-button guard in agent.js only stops a second answer from
       // the SAME browser tab (it checks its own local currentCallId) — it
       // has no idea this agent is also signed in elsewhere. Since an agent
@@ -1701,11 +1916,33 @@ function handleAgentConnection(conn) {
       call.agentId = agentId;
       call.agentName = agentName;
       call.answeredAt = Date.now();
-      conn.send({ type: 'call-assigned', callId, topic: call.topic, kioskId: call.kioskId, queuedAt: call.queuedAt });
+      conn.send({
+        type: 'call-assigned',
+        callId,
+        topic: call.topic,
+        kioskId: call.kioskId,
+        queuedAt: call.queuedAt,
+        language: call.language,
+        languageLabel: languageLabel(call.language),
+        transferredFrom: call.transferredFrom || null,
+        transferNote: call.transferNote || null,
+      });
       if (call.guestConn && call.guestConn.alive) {
         call.guestConn.send({ type: 'call-accepted', agentName });
       }
       broadcastQueue();
+      return;
+    }
+
+    if (msg.type === 'transfer-call' && msg.callId) {
+      const call = calls.get(msg.callId);
+      if (call && call.agentConn === conn) {
+        transferCall(msg.callId, {
+          note: String(msg.note || '').trim().slice(0, 500),
+          language: msg.language,
+          fromAgentName: agentName,
+        });
+      }
       return;
     }
 
