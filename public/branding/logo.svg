@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Front desk bell">
+  <!-- Default placeholder brand mark — a simple concierge bell.
+       Replace this file with your own logo (see README's "Customizing
+       the kiosk's branding" section). -->
+  <ellipse cx="50" cy="78" rx="34" ry="7" fill="#2f6fed"/>
+  <path d="M50 20c16 0 29 13 29 29v13H21V49c0-16 13-29 29-29z" fill="#2f6fed"/>
+  <rect x="16" y="62" width="68" height="9" rx="4.5" fill="#2f6fed"/>
+  <circle cx="50" cy="13" r="7" fill="#2f6fed"/>
+</svg>

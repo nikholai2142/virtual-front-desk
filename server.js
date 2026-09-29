@@ -349,6 +349,13 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  // .jpg/.jpeg/.webp: added for the kiosk's branding/background.* image —
+  // see public/kiosk.css and the README's "Customizing the kiosk's
+  // branding" section. Without a matching Content-Type here, a browser
+  // won't reliably treat the file as a usable CSS background image.
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
 };
 
 function serveStatic(req, res) {

@@ -17,11 +17,25 @@ html, body {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-user-select: none;
   user-select: none;
+  /* Background image, with a graceful fallback if you haven't added one.
+     Each layer below is independent: if branding/background.jpg doesn't
+     exist, that layer just doesn't paint and the gradient underneath shows
+     through instead — no broken-image icon, no code changes needed either
+     way. The dark gradient on top keeps on-screen text readable no matter
+     how bright your own photo is. To use your own photo, add
+     public/branding/background.jpg (see README's "Customizing the kiosk's
+     branding" section) — no HTML/CSS edits required. */
+  background-image:
+    linear-gradient(180deg, rgba(11, 18, 32, 0.55), rgba(11, 18, 32, 0.8)),
+    url('branding/background.jpg'),
+    linear-gradient(160deg, #0b1220 0%, #121b2e 55%, #17264a 100%);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .screen {
@@ -36,7 +50,7 @@ html, body {
 }
 .screen.active { display: flex; }
 
-.brand-mark { font-size: 64px; margin-bottom: 8px; }
+.brand-mark { width: 72px; height: 72px; margin-bottom: 8px; object-fit: contain; }
 h1 { font-size: 44px; margin: 0 0 8px; }
 h2 { font-size: 30px; margin: 16px 0 4px; }
 .sub { color: var(--sub); font-size: 18px; margin: 0 0 24px; }
@@ -60,7 +74,7 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
   transition: transform .12s ease, background .12s ease;
 }
 .start-call-btn:active { transform: scale(0.96); background: var(--accent-2); }
-.dept-icon { font-size: 48px; }
+.dept-icon { width: 48px; height: 48px; object-fit: contain; }
 
 .link-btn-inline {
   background: none; border: none; color: var(--sub); font-size: 13px;

@@ -855,6 +855,7 @@ virtual-front-desk/
 ├── package.json
 └── public/
     ├── kiosk.html / kiosk.css / kiosk.js   Guest-facing lobby screen
+    ├── branding/                           Kiosk logo/icon/background — see "Customizing the kiosk's branding"
     ├── agent.html / agent.css / agent.js   Agent dashboard (calls + WhatsApp/Messenger chats)
     └── admin.html / admin.css / admin.js   Admin dashboard (Dashboard, Agent Performance, User Management, Configuration)
 ```
@@ -866,9 +867,9 @@ virtual-front-desk/
   with a `data-topic` attribute back into `public/kiosk.html`'s idle
   screen (each needs its own click listener like `btn-start-call`'s in
   `kiosk.js`).
-- **Branding**: colors are CSS custom properties at the top of
-  `kiosk.css` / `agent.css` (`--bg`, `--accent`, etc.); swap the 🛎️ emoji
-  for a logo image.
+- **Colors**: CSS custom properties at the top of `kiosk.css` / `agent.css`
+  (`--bg`, `--accent`, etc.).
+- **Kiosk logo, start-button icon, and background image** — see below.
 - **Wait-time warning**: `WAIT_WARNING_MS` in `kiosk.js` (default 60s)
   controls when the kiosk shows the "still connecting… dial 0" notice.
 - **Agents**: add/remove them from the `/admin` dashboard (no restart
@@ -876,3 +877,35 @@ virtual-front-desk/
   "Persistent storage" above), or edit `agents.json` by hand and redeploy.
 - **Admin password**: edit `admin.json` (`{"password": "..."}`) and
   redeploy.
+
+### Customizing the kiosk's branding
+
+The kiosk's logo, its Start Video Call button icon, and its background all
+come from three files under `public/branding/`, ready to swap out without
+touching any HTML or CSS:
+
+| What | File | Format | Default |
+|---|---|---|---|
+| Logo (shown on the setup and idle screens) | `public/branding/logo.svg` | SVG | a simple bell mark |
+| Start-button icon | `public/branding/start-icon.svg` | SVG | a simple suitcase |
+| Background (setup, idle, waiting, ended, error screens) | `public/branding/background.jpg` | JPG or PNG | none — a dark gradient is used instead |
+
+**To use your own logo or icon:** replace `logo.svg` / `start-icon.svg`
+with your own SVG file of the same name (any image editor or "export as
+SVG" from your logo source works). If you only have a PNG or JPG version,
+that's fine too — just save it into `public/branding/` (e.g.
+`logo.png`) and change the one matching `src="branding/logo.svg"`
+attribute in `public/kiosk.html` (there are two, both commented) to point
+at your filename instead.
+
+**To use your own background photo:** just add a file named
+`public/branding/background.jpg` (landscape, at least 1920×1080 works
+well) — no code changes needed. It's automatically detected and used with
+a dark gradient over it so on-screen text stays readable regardless of how
+bright the photo is. Using a `.png` instead of `.jpg`? Change the one
+`url('branding/background.jpg')` line near the top of `public/kiosk.css`
+to match. Leave the file out entirely and the kiosk falls back to a plain
+dark gradient — never a broken image.
+
+None of this touches the agent or admin dashboards — this is the
+guest-facing kiosk screen only.
