@@ -37,6 +37,7 @@ function showAdminPage(pageId) {
   // The dashboard's chart/stats only need loading when the page is actually
   // shown — everything else is already kept fresh by refreshAll()'s poll.
   if (pageId === 'page-overview' && adminPassword) loadOverview();
+  if (pageId === 'page-performance' && adminPassword) loadPerformanceStats();
   if (pageId === 'page-config' && adminPassword) loadStorage();
 }
 
@@ -149,13 +150,16 @@ async function refreshAll() {
       api('/api/admin/password-reset-requests'),
     ]);
     renderAgents(agentsData.agents);
-    renderStats(statsData);
-    renderPerfCharts(statsData.agents);
+    renderTopbarStats(statsData);
     renderResetRequests(resetData.requests);
-    // The dashboard's own filtered view only needs refreshing while it's
-    // actually the visible page — no point re-fetching and re-drawing a
-    // chart nobody's looking at every 10 seconds.
+    // Both filtered views (Dashboard's tiles/chart and Agent Performance's
+    // charts/table) only need refreshing while actually visible — no point
+    // re-fetching and re-drawing something nobody's looking at every 10
+    // seconds, and doing it unconditionally would also fight with whatever
+    // date-range filter the admin has picked on that page (see
+    // loadPerformanceStats()).
     if (currentAdminPage === 'page-overview') loadOverview();
+    if (currentAdminPage === 'page-performance') loadPerformanceStats();
   } catch (err) {
     if (err.status === 401) {
       clearInterval(refreshHandle);
@@ -271,14 +275,21 @@ function renderResetRequests(requests) {
   });
 }
 
-function renderStats(data) {
+// `totals-summary` (top bar: "X online · Y waiting · Z on a call") is
+// always live, current-moment state — it isn't affected by the Agent
+// Performance page's date-range filter, so it's kept on the plain 10s poll
+// in refreshAll() rather than the filtered fetch below. `stats-note` lives
+// on the Agent Performance page but its text is the same persistence
+// explanation either way, so it's fine to have either fetch keep it fresh.
+function renderTopbarStats(data) {
   const totals = data.totals;
   document.getElementById('totals-summary').textContent =
     `${totals.agentsOnline} online · ${totals.guestsWaiting} waiting · ${totals.activeCalls} on a call`;
   document.getElementById('stats-note').textContent = data.note;
+}
 
+function renderStatsTable(stats) {
   const table = document.getElementById('stats-table');
-  const stats = data.agents;
   if (!stats.length) {
     table.innerHTML = '<p class="empty-note">No agents yet.</p>';
     return;
@@ -496,12 +507,19 @@ function renderPerfCharts(stats) {
 let lastOverviewEntries = [];
 let lastOverviewRange = { from: null, to: null };
 
-function resolveDateRange() {
-  const preset = document.getElementById('filter-range').value;
+/**
+ * Resolves a preset/custom date-range <select> + its two <input type=date>
+ * fields into explicit {from, to} timestamps (ms since epoch, null =
+ * unbounded). Shared by the Dashboard's filter bar (filter-range/from/to)
+ * and the Agent Performance page's own copy (perf-filter-range/from/to) —
+ * same behavior, different element ids.
+ */
+function resolveDateRangeFor(rangeId, fromId, toId) {
+  const preset = document.getElementById(rangeId).value;
   const now = new Date();
   if (preset === 'custom') {
-    const fromVal = document.getElementById('filter-from').value;
-    const toVal = document.getElementById('filter-to').value;
+    const fromVal = document.getElementById(fromId).value;
+    const toVal = document.getElementById(toId).value;
     const from = fromVal ? new Date(`${fromVal}T00:00:00`).getTime() : null;
     const to = toVal ? new Date(`${toVal}T23:59:59.999`).getTime() : Date.now();
     return { from, to };
@@ -517,6 +535,14 @@ function resolveDateRange() {
   return { from: Date.now() - days * 86400000, to: Date.now() };
 }
 
+function resolveDateRange() {
+  return resolveDateRangeFor('filter-range', 'filter-from', 'filter-to');
+}
+
+function resolvePerfDateRange() {
+  return resolveDateRangeFor('perf-filter-range', 'perf-filter-from', 'perf-filter-to');
+}
+
 document.getElementById('filter-range').addEventListener('change', () => {
   const isCustom = document.getElementById('filter-range').value === 'custom';
   document.getElementById('filter-from-field').classList.toggle('hidden', !isCustom);
@@ -527,6 +553,33 @@ document.getElementById('filter-range').addEventListener('change', () => {
   document.getElementById(id).addEventListener('change', loadOverview);
 });
 document.getElementById('filter-groupby').addEventListener('change', renderCallsChartFromCache);
+
+document.getElementById('perf-filter-range').addEventListener('change', () => {
+  const isCustom = document.getElementById('perf-filter-range').value === 'custom';
+  document.getElementById('perf-filter-from-field').classList.toggle('hidden', !isCustom);
+  document.getElementById('perf-filter-to-field').classList.toggle('hidden', !isCustom);
+  loadPerformanceStats();
+});
+['perf-filter-from', 'perf-filter-to'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', loadPerformanceStats);
+});
+
+/** Agent Performance page: fetches the calls-handled/rating charts and the agent-details table for whatever date range perf-filter-range is currently set to (all-time by default). */
+async function loadPerformanceStats() {
+  const { from, to } = resolvePerfDateRange();
+  const params = new URLSearchParams();
+  if (from !== null) params.set('from', from);
+  if (to !== null) params.set('to', to);
+  try {
+    const data = await api(`/api/admin/stats?${params.toString()}`);
+    document.getElementById('stats-note').textContent = data.note;
+    renderStatsTable(data.agents);
+    renderPerfCharts(data.agents);
+  } catch (err) {
+    if (err.status === 401) return; // the next refreshAll() tick will handle bouncing back to sign-in
+    console.warn('Could not load agent performance stats:', err);
+  }
+}
 
 /** Fills the agent/kiosk filter <select>s from the endpoint's own filter option lists, preserving whatever the admin already had picked. */
 function populateFilterOptions(filters) {
@@ -653,7 +706,14 @@ async function openAgentDetail(agentId) {
   document.getElementById('agent-detail-calls').innerHTML = '';
   modal.classList.remove('hidden');
   try {
-    const data = await api(`/api/admin/agents/${encodeURIComponent(agentId)}/detail`);
+    // Opened only from the Agent Performance page (its table rows and chart
+    // bars), so its own date-range filter applies here too — otherwise the
+    // detail view's totals wouldn't match the row/bar the admin just clicked.
+    const { from, to } = resolvePerfDateRange();
+    const params = new URLSearchParams();
+    if (from !== null) params.set('from', from);
+    if (to !== null) params.set('to', to);
+    const data = await api(`/api/admin/agents/${encodeURIComponent(agentId)}/detail?${params.toString()}`);
     renderAgentDetail(data);
   } catch (err) {
     document.getElementById('agent-detail-name').textContent = 'Could not load';

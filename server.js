@@ -149,6 +149,11 @@ class WSConnection {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.alive = true;
+    // Heartbeat bookkeeping for the keepalive interval below (separate from
+    // `alive`, which just means "hasn't been torn down yet"). Starts true so
+    // a brand-new connection isn't terminated before its first ping cycle.
+    // See the interval's own comment for why this exists at all.
+    this.heartbeatOk = true;
     this.onMessage = null;
     this.onClose = null;
 
@@ -229,7 +234,10 @@ class WSConnection {
       this._sendRaw(0xa, payload);
       return;
     }
-    if (opcode === 0xa) return; // pong, ignore
+    if (opcode === 0xa) { // pong — proof this connection is still actually alive, see the keepalive interval below
+      this.heartbeatOk = true;
+      return;
+    }
 
     if (opcode === 0x1 || opcode === 0x2) {
       this._fragments = [payload];
@@ -295,6 +303,19 @@ class WSConnection {
   close() {
     this._sendRaw(0x8, Buffer.alloc(0));
     this.socket.end();
+  }
+
+  /**
+   * Forcibly tears down a connection the keepalive interval has decided is
+   * dead (missed a pong). Unlike close(), this doesn't bother with a
+   * graceful close-frame handshake — a connection that isn't answering pings
+   * isn't going to answer that either — it just runs the same cleanup a
+   * real socket 'close'/'error' would (via _close(), which fires onClose())
+   * and drops the underlying TCP socket immediately.
+   */
+  terminate() {
+    this._close();
+    try { this.socket.destroy(); } catch { /* already gone */ }
   }
 }
 
@@ -672,8 +693,20 @@ function statsForEntries(entries) {
   };
 }
 
-function computeAgentStats() {
-  const rows = AGENTS.map((a) => ({ agentId: a.id, agentName: a.name, ...statsForEntries(entriesForAgent(a)) }));
+/** True if a call log entry's answeredAt falls within [from, to] — from/to of null/undefined leave that side unbounded. Shared by computeAgentStats() and computeAgentDetail() so the Agent Performance page's date-range filter and its per-agent detail view always agree. */
+function answeredInRange(e, from, to) {
+  if (Number.isFinite(from) && e.answeredAt < from) return false;
+  if (Number.isFinite(to) && e.answeredAt > to) return false;
+  return true;
+}
+
+/** Per-agent breakdown for the Agent Performance page. `from`/`to` (ms since epoch) optionally restrict it to calls answered in that range — omit both for all-time, the original behavior. */
+function computeAgentStats(from, to) {
+  const rows = AGENTS.map((a) => ({
+    agentId: a.id,
+    agentName: a.name,
+    ...statsForEntries(entriesForAgent(a).filter((e) => answeredInRange(e, from, to))),
+  }));
 
   // Calls from agents who've since been removed shouldn't just vanish from
   // the numbers — group those by name under an id-less row instead.
@@ -681,6 +714,7 @@ function computeAgentStats() {
   const knownNames = new Set(AGENTS.map((a) => a.name));
   const orphanEntriesByName = new Map();
   for (const e of callLog) {
+    if (!answeredInRange(e, from, to)) continue;
     const belongsToKnownAgent = e.agentId ? knownIds.has(e.agentId) : knownNames.has(e.agentName);
     if (belongsToKnownAgent) continue;
     const name = e.agentName || 'Unknown';
@@ -778,9 +812,11 @@ async function getStorageUsage() {
   return { backend: 'local', freeTierBytes: null, ...local };
 }
 
-/** Full call history + totals for one agent, including recording links — the admin dashboard's agent-detail view. */
-async function computeAgentDetail(agent) {
-  const entries = entriesForAgent(agent).sort((a, b) => b.answeredAt - a.answeredAt);
+/** Full call history + totals for one agent, including recording links — the admin dashboard's agent-detail view. `from`/`to` optionally restrict it to the same date range as the Agent Performance page's filter, so the numbers in the detail modal always match the row/bar the admin clicked. */
+async function computeAgentDetail(agent, from, to) {
+  const entries = entriesForAgent(agent)
+    .filter((e) => answeredInRange(e, from, to))
+    .sort((a, b) => b.answeredAt - a.answeredAt);
   // Existence checks run in parallel (one per call that has a recording at
   // all — recordingForCall() returns immediately for the rest) rather than
   // one at a time, so a long-serving agent's full history doesn't turn this
@@ -1333,7 +1369,11 @@ async function handleAdminApi(req, res, urlObj) {
     const id = decodeURIComponent(agentDetailMatch[1]);
     const agent = AGENTS.find((a) => a.id === id);
     if (!agent) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
-    sendJson(res, 200, await computeAgentDetail(agent));
+    const fromParam = urlObj.searchParams.get('from');
+    const toParam = urlObj.searchParams.get('to');
+    const from = fromParam ? Number(fromParam) : null;
+    const to = toParam ? Number(toParam) : null;
+    sendJson(res, 200, await computeAgentDetail(agent, from, to));
     return;
   }
 
@@ -1411,10 +1451,20 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // The `agents` breakdown optionally takes the same from/to (ms since
+  // epoch) as the Dashboard's overview endpoint, for the Agent Performance
+  // page's own date-range filter — omit both for all-time (the default, and
+  // the only behavior before that filter existed). `totals` is always live,
+  // current-moment state (who's online/waiting/on a call right now), so it's
+  // never affected by the filter.
   if (urlObj.pathname === '/api/admin/stats' && req.method === 'GET') {
+    const fromParam = urlObj.searchParams.get('from');
+    const toParam = urlObj.searchParams.get('to');
+    const from = fromParam ? Number(fromParam) : null;
+    const to = toParam ? Number(toParam) : null;
     const storageStatus = store.getStatus();
     sendJson(res, 200, {
-      agents: computeAgentStats(),
+      agents: computeAgentStats(from, to),
       totals: {
         calls: callLog.length,
         agentsOnline: agentConns.size,
@@ -1871,12 +1921,38 @@ process.on('unhandledRejection', (err) => {
   console.error('unhandledRejection (server kept running):', err);
 });
 
-// Keepalive pings so dead connections (network drop, closed laptop lid)
-// don't linger and confuse the queue — and so a proxy in front of this
-// server (Render's included) doesn't treat a quiet-but-live connection as
-// idle and close it out from under an in-progress call.
+// Keepalive pings so a proxy in front of this server (Render's included)
+// doesn't treat a quiet-but-live connection as idle and close it out from
+// under an in-progress call — AND, just as importantly, so dead connections
+// (network drop, closed laptop lid, wifi that silently stopped routing)
+// actually get detected and cleaned up.
+//
+// Sending pings alone doesn't do that second part: a plain TCP write into a
+// socket whose other end has vanished without a clean FIN/RST doesn't error
+// out on its own — the OS won't give up on it until its own retransmission
+// timeout, which defaults to many minutes (sometimes much longer). Until
+// then this connection would just sit in agentConns looking perfectly
+// "alive", silently swallowing every queue-update (and the ring that comes
+// with it) sent its way — this is what made a signed-in agent stop hearing
+// new calls after their laptop slept or their network dropped for a while,
+// with nothing but a missed heartbeat to tell.
+//
+// So this tracks the standard ping/pong liveness pattern instead: each
+// connection is expected to answer the PREVIOUS ping (heartbeatOk, set by
+// the pong handler in _handleFrame) before the next one goes out. Miss one
+// full cycle and it's terminated outright — same cleanup a real close would
+// trigger (onClose(), which drops it from agentConns/allConns and ends any
+// call it was on) — rather than waiting on the OS to eventually notice.
 setInterval(() => {
-  for (const c of allConns) c.ping();
+  for (const c of allConns) {
+    if (!c.heartbeatOk) {
+      console.log('[keepalive] connection missed a heartbeat — terminating as dead');
+      c.terminate();
+      continue;
+    }
+    c.heartbeatOk = false;
+    c.ping();
+  }
 }, 20000).unref();
 
 // ======================================================================

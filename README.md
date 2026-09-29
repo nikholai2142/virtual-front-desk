@@ -362,6 +362,33 @@ screen.
   to host — so it plays as soon as the queue updates, with no extra
   network request.
 
+### Staying connected
+
+The ring (and everything else pushed to the dashboard — the queue,
+"Recent calls" updates, chat) only works while the agent dashboard's
+WebSocket connection is actually alive. An agent typically leaves that tab
+open for hours between calls, which is exactly the situation most likely to
+hit a silent network drop — wifi blipping, a laptop sleeping and waking, a
+proxy timing out a connection it thinks is idle. If that connection dies
+quietly (no clean close, just goes silent) and nothing notices, a call that
+comes in afterward would never reach that agent at all — it just wouldn't
+ring, with no obvious sign anything was wrong.
+
+Two things guard against this:
+
+- **The server actively checks.** Every 20 seconds it pings each open
+  connection and expects a reply before the next ping is due; a connection
+  that misses one is assumed dead and torn down right away (ending any call
+  it was on, so a guest never gets stuck waiting on an agent who's actually
+  gone) instead of silently sticking around.
+- **The dashboard reconnects on its own.** If an agent's connection ever
+  drops while they're signed in — for this reason or any other — it
+  reconnects automatically (with a short backoff, and immediately if you
+  switch back to a tab that had gone quiet in the background) rather than
+  leaving you stuck until you notice and refresh the page yourself. The dot
+  next to your name in the top bar reflects this: green while connected,
+  amber while it's reconnecting.
+
 ## Call hold
 
 An agent can put an active call on hold from the **⏸ Hold** button next
@@ -473,9 +500,13 @@ Dashboard, it resets to the last 200 entries on a restart unless
 
 ### Agent Performance
 
-A per-agent breakdown, **not** affected by the Dashboard's filters — this
-page is always all-time (or however far back your call history goes; see
-"Persistent storage" below). It shows:
+A per-agent breakdown, with its own **date range** filter (All time,
+Today, Last 7/30/90 days, This month, or a custom From/To range) — separate
+from the Dashboard's filters above, so you can look at, say, this agent's
+last 90 days without disturbing whatever range the Dashboard is showing.
+It defaults to **All time** (or however far back your call history goes;
+see "Persistent storage" below), matching how this page behaved before the
+filter existed. It shows:
 
 - A **calls handled per agent** bar chart and an **average rating per
   agent** bar chart (agents with no ratings yet are left off the second
@@ -489,6 +520,12 @@ page is always all-time (or however far back your call history goes; see
   remarks) where one was given — including calls from before these
   features existed (older entries just won't show a hold time or rating,
   since neither was tracked yet).
+
+The detail view honors whichever date range is currently selected on this
+page, so the totals you see there always match the row or bar you clicked.
+An agent who's been removed still keeps their calls in the chart/table for
+any range that covers them; an agent who's on file but simply had no calls
+in the selected range shows a row with **0 calls** rather than disappearing.
 
 ### User Management
 

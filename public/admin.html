@@ -111,6 +111,28 @@
 
       <!-- AGENT PERFORMANCE -->
       <div id="page-performance" class="admin-page">
+        <div class="filters-bar">
+          <div class="filter-field">
+            <label for="perf-filter-range">Date range</label>
+            <select id="perf-filter-range">
+              <option value="today">Today</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="month">This month</option>
+              <option value="all" selected>All time</option>
+              <option value="custom">Custom range…</option>
+            </select>
+          </div>
+          <div class="filter-field custom-date-field hidden" id="perf-filter-from-field">
+            <label for="perf-filter-from">From</label>
+            <input type="date" id="perf-filter-from" />
+          </div>
+          <div class="filter-field custom-date-field hidden" id="perf-filter-to-field">
+            <label for="perf-filter-to">To</label>
+            <input type="date" id="perf-filter-to" />
+          </div>
+        </div>
         <p id="stats-note" class="stats-note"></p>
 
         <section class="panel panel-full">

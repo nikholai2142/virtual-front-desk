@@ -146,10 +146,70 @@ function showLoginError(text) {
   el.classList.remove('hidden');
 }
 
-function connectWS(password) {
+// ---- Reconnecting ----------------------------------------------------
+// The dashboard's WebSocket has to sit open for however long an agent goes
+// between calls — sometimes hours — which is exactly the situation most
+// likely to hit a silent network drop: wifi blipping, a laptop sleeping and
+// waking, a proxy timing out a connection it thinks is idle. Before this,
+// a lost connection just turned the status dot red and sat there forever —
+// nothing reconnected, so no new 'queue-update' (and the ring that comes
+// with it) could ever arrive again. A call that came in after that point
+// would never ring, with no sign anything was wrong beyond a small dot
+// changing color. This reconnects automatically instead, with backoff, and
+// also retries immediately when the tab becomes visible again (an agent is
+// far more likely to check a tab right after switching back to it than to
+// be staring at it when the backoff timer happens to fire).
+let signedOutIntentionally = false;
+let reconnecting = false;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+const RECONNECT_BASE_MS = 2000;
+const RECONNECT_MAX_MS = 30000;
+
+function setConnectionStatus(state) {
+  const dot = document.getElementById('agent-status-dot');
+  if (state === 'connected') {
+    dot.style.background = 'var(--good)';
+    dot.title = 'Connected';
+  } else if (state === 'reconnecting') {
+    dot.style.background = '#f6c76a';
+    dot.title = 'Reconnecting…';
+  } else {
+    dot.style.background = 'var(--danger)';
+    dot.title = 'Disconnected';
+  }
+}
+
+function scheduleReconnect() {
+  if (signedOutIntentionally || reconnectTimer) return;
+  setConnectionStatus('reconnecting');
+  const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
+  reconnectAttempt += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (signedOutIntentionally) return;
+    const password = sessionStorage.getItem(STORAGE_KEY);
+    if (password) connectWS(password, { isReconnect: true });
+  }, delay);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || signedOutIntentionally) return;
+  if (!screens['screen-dashboard'].classList.contains('active')) return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  // Coming back to a hidden tab — don't make the agent wait out whatever
+  // backoff delay happened to be in progress.
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  const password = sessionStorage.getItem(STORAGE_KEY);
+  if (password) connectWS(password, { isReconnect: true });
+});
+
+function connectWS(password, { isReconnect = false } = {}) {
   loginInProgress = true;
   lastLoginPassword = password;
-  setLoginBusy(true);
+  reconnecting = isReconnect;
+  if (!isReconnect) setLoginBusy(true);
   document.getElementById('login-error').classList.add('hidden');
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -157,7 +217,9 @@ function connectWS(password) {
   try {
     socket = new WebSocket(`${proto}://${location.host}/ws?role=agent`);
   } catch {
-    showLoginError('Could not start a connection. Check the URL and try again.');
+    loginInProgress = false;
+    if (isReconnect) scheduleReconnect();
+    else showLoginError('Could not start a connection. Check the URL and try again.');
     return;
   }
   ws = socket;
@@ -165,7 +227,9 @@ function connectWS(password) {
   clearTimeout(loginTimeoutHandle);
   loginTimeoutHandle = setTimeout(() => {
     if (loginInProgress) {
-      showLoginError('No response from the server after 20s. If this app was asleep it can take up to a minute to wake up — try again.');
+      if (!isReconnect) {
+        showLoginError('No response from the server after 20s. If this app was asleep it can take up to a minute to wake up — try again.');
+      }
       try { socket.close(); } catch { /* ignore */ }
     }
   }, LOGIN_TIMEOUT_MS);
@@ -181,14 +245,25 @@ function connectWS(password) {
   });
 
   socket.addEventListener('error', () => {
-    if (loginInProgress) showLoginError('Connection error. Please try again.');
+    if (loginInProgress && !isReconnect) showLoginError('Connection error. Please try again.');
   });
 
   socket.addEventListener('close', () => {
     if (loginInProgress) {
-      showLoginError('Connection closed before signing in. Please try again.');
+      if (isReconnect) {
+        loginInProgress = false;
+        scheduleReconnect();
+      } else {
+        showLoginError('Connection closed before signing in. Please try again.');
+      }
     } else if (screens['screen-dashboard'].classList.contains('active')) {
-      document.getElementById('agent-status-dot').style.background = '#e5484d';
+      // The connection dropped while signed in. The server's own
+      // dead-connection detection (see server.js's keepalive interval) has
+      // almost certainly already ended any call we were on by now, so bring
+      // the local UI in line with that rather than leaving an active-call
+      // screen up for a call that's already over on the server's side.
+      if (currentCallId) endActiveCallUI();
+      scheduleReconnect();
     }
   });
 }
@@ -203,6 +278,8 @@ function handleServerMessage(msg) {
       loginInProgress = false;
       clearTimeout(loginTimeoutHandle);
       setLoginBusy(false);
+      reconnectAttempt = 0;
+      setConnectionStatus('connected');
       sessionStorage.setItem(STORAGE_KEY, lastLoginPassword);
       document.getElementById('agent-name-label').textContent = msg.name;
       showScreen('screen-dashboard');
@@ -212,6 +289,15 @@ function handleServerMessage(msg) {
 
     case 'agent-login-fail':
       sessionStorage.removeItem(STORAGE_KEY);
+      if (reconnecting) {
+        // The stored password stopped working while we were disconnected
+        // (e.g. an admin reset it) — retrying it forever would never
+        // succeed, so drop back to the login screen instead of silently
+        // spinning on a password that's never going to work again.
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        showScreen('screen-login');
+      }
       showLoginError('Incorrect password. Try again.');
       break;
 
@@ -1041,6 +1127,8 @@ document.getElementById('change-password-form').addEventListener('submit', (e) =
 
 document.getElementById('btn-sign-out').addEventListener('click', () => {
   if (currentCallId) wsSend({ type: 'end-call', callId: currentCallId });
+  signedOutIntentionally = true;
+  clearTimeout(reconnectTimer);
   sessionStorage.removeItem(STORAGE_KEY);
   try { if (ws) ws.close(); } catch { /* ignore */ }
   location.reload();
