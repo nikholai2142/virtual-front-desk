@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Front Desk — Video Call</title>
+<link rel="stylesheet" href="kiosk.css" />
+</head>
+<body>
+
+  <!-- KIOSK SETUP: shown once per device until it's given a name -->
+  <section id="screen-kiosk-setup" class="screen">
+    <form id="kiosk-setup-form" class="center-card">
+      <!-- Your logo — replace public/branding/logo.svg with your own (see
+           README's "Customizing the kiosk's branding" section) -->
+      <img class="brand-mark" src="branding/logo.png" alt="" />
+      <h2>Set up this kiosk</h2>
+      <p class="sub">Give this kiosk a name (e.g. "Lobby" or "Pool Deck") so agents know where each call is coming from.</p>
+      <input id="kiosk-setup-input" type="text" placeholder="Kiosk name" maxlength="40" autocomplete="off" />
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </section>
+
+  <!-- IDLE: start a call -->
+  <section id="screen-idle" class="screen">
+    <div class="brand">
+      <!-- Your logo — replace public/branding/logo.svg with your own (see
+           README's "Customizing the kiosk's branding" section) -->
+      <img class="brand-mark" src="branding/logo.png" alt="" />
+      <h1>Need help?</h1>
+      <p class="sub">Tap below to start a video call with our Front Desk team.</p>
+    </div>
+    <button id="btn-start-call" class="start-call-btn" data-topic="Front Desk">
+      <!-- Replace public/branding/start-icon.svg to change this icon -->
+      <img class="dept-icon" src="branding/start-icon.svg" alt="" /><span>Start Video Call</span>
+    </button>
+    <p class="footnote">Prefer to call? Dial <strong>0</strong> from your room phone.<br />
+      <span class="kiosk-id-footnote">Kiosk: <span id="kiosk-id-label"></span> · <button type="button" id="btn-change-kiosk-id" class="link-btn-inline">change</button></span>
+    </p>
+  </section>
+
+  <!-- LANGUAGE: guest picks which language to be connected in, so the
+       queue can route them to (or transfer them to) an agent who speaks
+       it. Skipped automatically if only one language is configured — see
+       kiosk.js's maybeShowLanguageScreen(). -->
+  <section id="screen-language" class="screen">
+    <div class="center-card">
+      <h2>What language do you speak?</h2>
+      <p class="sub">We'll connect you with an agent who speaks it.</p>
+      <div id="language-list" class="language-list"></div>
+      <button id="btn-cancel-language" class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- PERMISSION / CONNECTING -->
+  <section id="screen-connecting" class="screen">
+    <div class="center-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2 id="connecting-title">Requesting camera access…</h2>
+      <p id="connecting-sub" class="sub">Please allow camera and microphone access to continue.</p>
+      <button id="btn-cancel-connecting" class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- WAITING FOR AGENT (also reused mid-call for a transfer's brief
+       "connecting you to another agent" wait — see kiosk.js's handling of
+       the 'call-transferring' server message) -->
+  <section id="screen-waiting" class="screen">
+    <div class="center-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2 id="waiting-title">Connecting you to the next available agent…</h2>
+      <p class="sub"><span id="waiting-topic"></span> · waiting <span id="waiting-time">0:00</span></p>
+      <p id="waiting-warning" class="warning hidden">This is taking longer than usual. You're welcome to keep waiting, or dial <strong>0</strong> from a house phone.</p>
+      <button id="btn-cancel-waiting" class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
+  <!-- IN CALL -->
+  <section id="screen-call" class="screen">
+    <div class="call-wrap">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div class="call-topbar">
+        <span id="call-agent-name">Connecting…</span>
+        <span id="call-timer">0:00</span>
+      </div>
+      <div class="rec-notice">🔴 This call may be recorded for quality and training purposes.</div>
+      <div id="hold-overlay" class="hold-overlay hidden">
+        <div class="hold-overlay-icon">⏸</div>
+        <h2>You're on hold</h2>
+        <p class="sub">Thanks for your patience — the agent will be right back with you.</p>
+      </div>
+      <div class="call-controls">
+        <button id="btn-toggle-mic" class="ctrl-btn" aria-label="Toggle microphone">🎤</button>
+        <button id="btn-toggle-cam" class="ctrl-btn" aria-label="Toggle camera">📷</button>
+        <button id="btn-hangup" class="ctrl-btn ctrl-end" aria-label="End call">📞</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ENDED -->
+  <section id="screen-ended" class="screen">
+    <div class="center-card">
+      <div class="check-mark">✓</div>
+      <h2>Thanks for stopping by!</h2>
+      <p class="sub" id="ended-message">We hope we could help. Have a great stay.</p>
+
+      <div id="rating-prompt" class="rating-prompt hidden">
+        <p class="rating-question" id="rating-question">How was your call?</p>
+        <div id="star-rating" class="star-rating" role="radiogroup" aria-label="Rate your call from 1 to 5 stars">
+          <button type="button" class="star-btn" data-star="1" aria-label="1 star">★</button>
+          <button type="button" class="star-btn" data-star="2" aria-label="2 stars">★</button>
+          <button type="button" class="star-btn" data-star="3" aria-label="3 stars">★</button>
+          <button type="button" class="star-btn" data-star="4" aria-label="4 stars">★</button>
+          <button type="button" class="star-btn" data-star="5" aria-label="5 stars">★</button>
+        </div>
+        <div id="rating-details" class="rating-details hidden">
+          <input id="rating-name" type="text" placeholder="Your name (optional)" maxlength="60" autocomplete="off" />
+          <textarea id="rating-remarks" placeholder="Any comments? (optional)" maxlength="500" rows="3"></textarea>
+          <button type="button" id="btn-submit-rating" class="btn btn-primary">Submit</button>
+        </div>
+        <button type="button" id="btn-skip-rating" class="link-btn-inline rating-skip">No thanks</button>
+      </div>
+
+      <p id="rating-thanks" class="sub hidden">🙏 Thanks for your feedback!</p>
+    </div>
+  </section>
+
+  <!-- ERROR -->
+  <section id="screen-error" class="screen">
+    <div class="center-card">
+      <div class="err-mark">!</div>
+      <h2 id="error-title">Something went wrong</h2>
+      <p class="sub" id="error-message">Please try again, or dial 0 from a house phone.</p>
+      <button id="btn-error-retry" class="btn btn-primary">Try Again</button>
+    </div>
+  </section>
+
+  <script src="kiosk.js"></script>
+</body>
+</html>

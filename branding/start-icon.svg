@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Start a call">
+  <!-- Default placeholder icon for the "Start Video Call" button — a
+       simple suitcase. Replace this file with your own icon (see
+       README's "Customizing the kiosk's branding" section). -->
+  <rect x="30" y="20" width="40" height="16" rx="5" fill="none" stroke="#ffffff" stroke-width="6"/>
+  <rect x="12" y="34" width="76" height="54" rx="10" fill="#ffffff"/>
+  <rect x="12" y="34" width="76" height="16" rx="8" fill="#ffffff" opacity="0.001"/>
+  <line x1="12" y1="58" x2="88" y2="58" stroke="#2f6fed" stroke-width="6"/>
+</svg>

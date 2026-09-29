@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Front Desk — Agent Dashboard</title>
+<link rel="stylesheet" href="agent.css" />
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <section id="screen-login" class="screen active">
+    <form id="login-form" class="login-card">
+      <h1>Agent Sign-in</h1>
+      <p class="sub">Enter your password to go online.</p>
+      <input id="login-password" type="password" autocomplete="current-password" placeholder="Password" maxlength="60" />
+      <button id="login-submit" type="submit" class="btn btn-primary">Sign In</button>
+      <p id="login-error" class="error hidden"></p>
+      <button type="button" id="btn-forgot-password" class="link-btn">Forgot your password?</button>
+    </form>
+
+    <form id="forgot-password-form" class="login-card hidden">
+      <h1>Request a reset</h1>
+      <p class="sub">Enter your name and an admin will set you a new password.</p>
+      <input id="forgot-password-name" type="text" autocomplete="name" placeholder="Your name" maxlength="60" />
+      <button id="forgot-password-submit" type="submit" class="btn btn-primary">Send request</button>
+      <p id="forgot-password-status" class="hint hidden"></p>
+      <button type="button" id="btn-back-to-login" class="link-btn">Back to sign in</button>
+    </form>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="screen-dashboard" class="screen">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="logo">🛎️ <span class="logo-text">Virtual Front Desk</span></span>
+        <div class="view-tabs">
+          <button id="tab-calls" class="view-tab active" data-view="calls">📹 Calls</button>
+          <button id="tab-chats" class="view-tab" data-view="chats">
+            💬 Chats <span id="chat-unread-badge" class="count-badge hidden">0</span>
+          </button>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button id="btn-open-change-password" class="icon-btn" type="button" title="Change password">⚙</button>
+        <button id="btn-sign-out" class="btn-small" type="button">Sign out</button>
+        <span id="agent-status-dot" class="status-dot"></span>
+        <span id="agent-name-label">—</span>
+      </div>
+    </header>
+
+    <main id="view-calls" class="layout view active">
+      <aside class="queue-panel">
+        <h2>Waiting <span id="queue-count" class="count-badge">0</span>
+          <button id="btn-toggle-ring" class="ring-toggle-btn" type="button" title="Mute ring tone">🔔</button>
+        </h2>
+        <div id="queue-list" class="queue-list">
+          <p class="empty-note">No guests waiting.</p>
+        </div>
+
+        <h2 class="log-heading">Recent calls</h2>
+        <div id="call-log" class="call-log">
+          <p class="empty-note">No calls yet.</p>
+        </div>
+      </aside>
+
+      <section class="call-panel">
+        <div id="no-call-placeholder" class="no-call">
+          <div class="no-call-icon">📹</div>
+          <p>No active call. Answer a guest from the queue to begin.</p>
+        </div>
+
+        <div id="active-call" class="active-call hidden">
+          <div class="video-stage">
+            <video id="remote-video" autoplay playsinline></video>
+            <video id="local-video" autoplay playsinline muted></video>
+            <div id="hold-overlay" class="hold-overlay hidden">
+              <div class="hold-overlay-icon">⏸</div>
+              <div class="hold-overlay-title">Call on hold</div>
+              <div id="hold-countdown" class="hold-countdown">—</div>
+            </div>
+          </div>
+          <div class="call-meta">
+            <div>
+              <strong id="call-topic-label">—</strong>
+              <span id="call-language-badge" class="language-badge hidden"></span>
+              <span id="call-timer-label">0:00</span>
+              <span id="recording-indicator" class="recording-indicator hidden" title="This call is being recorded">🔴 REC</span>
+              <span id="hold-badge" class="hold-badge hidden">⏸ ON HOLD</span>
+            </div>
+            <div class="call-buttons">
+              <button id="btn-toggle-mic" class="ctrl-btn" title="Mute/unmute">🎤</button>
+              <button id="btn-toggle-cam" class="ctrl-btn" title="Camera on/off">📷</button>
+              <button id="btn-toggle-hold" class="ctrl-btn" title="Put call on hold">⏸ Hold</button>
+              <button id="btn-open-transfer" class="ctrl-btn" title="Transfer to another agent">↪ Transfer</button>
+              <button id="btn-end-call" class="ctrl-btn ctrl-end" title="End call">End Call</button>
+            </div>
+          </div>
+          <p id="transfer-context" class="transfer-context hidden"></p>
+          <textarea id="call-notes" placeholder="Notes for this call (saved automatically)…"></textarea>
+        </div>
+      </section>
+    </main>
+
+    <main id="view-chats" class="layout view">
+      <aside class="queue-panel">
+        <h2>Conversations</h2>
+        <div id="chats-list" class="queue-list">
+          <p class="empty-note">No conversations yet. Messages guests send to WhatsApp or Facebook will show up here.</p>
+        </div>
+      </aside>
+
+      <section class="call-panel">
+        <div id="no-thread-placeholder" class="no-call">
+          <div class="no-call-icon">💬</div>
+          <p>Select a conversation to view messages.</p>
+        </div>
+
+        <div id="active-thread" class="active-thread hidden">
+          <div class="thread-header">
+            <span id="thread-platform-icon">💬</span>
+            <strong id="thread-contact-label">—</strong>
+          </div>
+          <div id="thread-messages" class="thread-messages"></div>
+          <p id="thread-send-error" class="error hidden"></p>
+          <form id="thread-reply-form" class="thread-reply-form">
+            <textarea id="thread-reply-text" placeholder="Type a reply…" maxlength="2000"></textarea>
+            <button type="submit" class="btn btn-primary">Send</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </section>
+
+  <!-- CHANGE PASSWORD -->
+  <div id="change-password-modal" class="modal-overlay hidden">
+    <form id="change-password-form" class="modal-card">
+      <h2>Change your password</h2>
+      <p class="sub">Update the password you sign in with.</p>
+      <div class="modal-field">
+        <label for="cp-current">Current password</label>
+        <input id="cp-current" type="password" autocomplete="current-password" maxlength="60" />
+      </div>
+      <div class="modal-field">
+        <label for="cp-new">New password</label>
+        <input id="cp-new" type="password" autocomplete="new-password" maxlength="60" />
+      </div>
+      <div class="modal-field">
+        <label for="cp-confirm">Confirm new password</label>
+        <input id="cp-confirm" type="password" autocomplete="new-password" maxlength="60" />
+      </div>
+      <p id="change-password-error" class="error hidden"></p>
+      <p id="change-password-success" class="hint hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-change-password" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- TRANSFER CALL -->
+  <div id="transfer-modal" class="modal-overlay hidden">
+    <form id="transfer-form" class="modal-card">
+      <h2>Transfer this call</h2>
+      <p class="sub">The guest stays connected — they'll see a brief "connecting you to another agent" wait while it goes back into the queue.</p>
+      <div class="modal-field">
+        <label for="transfer-language">Language needed</label>
+        <select id="transfer-language"></select>
+      </div>
+      <div class="modal-field">
+        <label for="transfer-note">Note for the next agent (optional)</label>
+        <textarea id="transfer-note" maxlength="500" rows="3" placeholder="e.g. guest is asking about a late checkout"></textarea>
+      </div>
+      <p id="transfer-error" class="error hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-transfer" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Transfer</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="agent.js"></script>
+</body>
+</html>

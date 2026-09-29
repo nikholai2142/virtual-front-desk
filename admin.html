@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Front Desk — Admin</title>
+<link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <section id="screen-login" class="screen active">
+    <form id="login-form" class="login-card">
+      <h1>Admin Sign-in</h1>
+      <p class="sub">Enter the admin password to continue.</p>
+      <input id="login-password" type="password" autocomplete="off" placeholder="Password" />
+      <button id="login-submit" type="submit" class="btn btn-primary">Sign In</button>
+      <p id="login-error" class="error hidden"></p>
+    </form>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="screen-dashboard" class="screen">
+    <header class="topbar">
+      <span class="logo">🛎️ Virtual Front Desk — Admin</span>
+      <div class="topbar-right">
+        <span id="totals-summary" class="totals-summary"></span>
+        <button id="btn-open-change-password" class="icon-btn" type="button" title="Change admin password">⚙</button>
+        <button id="btn-refresh" class="btn-small">Refresh</button>
+        <button id="btn-sign-out" class="btn-small">Sign out</button>
+      </div>
+    </header>
+
+    <nav class="admin-nav" aria-label="Admin sections">
+      <button type="button" class="nav-btn active" data-page="page-overview">
+        <span class="nav-icon">📊</span> Dashboard
+      </button>
+      <button type="button" class="nav-btn" data-page="page-performance">
+        <span class="nav-icon">📈</span> Agent Performance
+      </button>
+      <button type="button" class="nav-btn" data-page="page-users">
+        <span class="nav-icon">👥</span> User Management
+        <span id="nav-users-badge" class="count-badge hidden">0</span>
+      </button>
+      <button type="button" class="nav-btn" data-page="page-config">
+        <span class="nav-icon">⚙️</span> Configuration
+      </button>
+    </nav>
+
+    <main class="admin-main">
+
+      <!-- DASHBOARD / OVERVIEW -->
+      <div id="page-overview" class="admin-page active">
+        <div class="filters-bar">
+          <div class="filter-field">
+            <label for="filter-range">Date range</label>
+            <select id="filter-range">
+              <option value="today">Today</option>
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="month">This month</option>
+              <option value="all">All time</option>
+              <option value="custom">Custom range…</option>
+            </select>
+          </div>
+          <div class="filter-field custom-date-field hidden" id="filter-from-field">
+            <label for="filter-from">From</label>
+            <input type="date" id="filter-from" />
+          </div>
+          <div class="filter-field custom-date-field hidden" id="filter-to-field">
+            <label for="filter-to">To</label>
+            <input type="date" id="filter-to" />
+          </div>
+          <div class="filter-field">
+            <label for="filter-agent">Agent</label>
+            <select id="filter-agent"><option value="">All agents</option></select>
+          </div>
+          <div class="filter-field">
+            <label for="filter-kiosk">Kiosk</label>
+            <select id="filter-kiosk"><option value="">All kiosks</option></select>
+          </div>
+          <div class="filter-field">
+            <label for="filter-groupby">Chart by</label>
+            <select id="filter-groupby">
+              <option value="day" selected>Day</option>
+              <option value="month">Month</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="stat-tiles">
+          <div class="stat-tile"><span class="stat-value" id="ov-calls">—</span><span class="stat-label">Calls</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-not-answered">—</span><span class="stat-label">Not answered</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-avg-talk">—</span><span class="stat-label">Avg talk time</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-total-talk">—</span><span class="stat-label">Total talk time</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-hold">—</span><span class="stat-label">On hold</span></div>
+          <div class="stat-tile"><span class="stat-value" id="ov-rating">—</span><span class="stat-label">Avg rating</span></div>
+        </div>
+
+        <section class="panel panel-full">
+          <div class="panel-head-row">
+            <h2>Calls over time</h2>
+            <span id="ov-chart-note" class="chart-note"></span>
+          </div>
+          <div id="calls-chart" class="chart-wrap"></div>
+        </section>
+
+        <p id="ov-note" class="stats-note"></p>
+      </div>
+
+      <!-- AGENT PERFORMANCE -->
+      <div id="page-performance" class="admin-page">
+        <div class="filters-bar">
+          <div class="filter-field">
+            <label for="perf-filter-range">Date range</label>
+            <select id="perf-filter-range">
+              <option value="today">Today</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="month">This month</option>
+              <option value="all" selected>All time</option>
+              <option value="custom">Custom range…</option>
+            </select>
+          </div>
+          <div class="filter-field custom-date-field hidden" id="perf-filter-from-field">
+            <label for="perf-filter-from">From</label>
+            <input type="date" id="perf-filter-from" />
+          </div>
+          <div class="filter-field custom-date-field hidden" id="perf-filter-to-field">
+            <label for="perf-filter-to">To</label>
+            <input type="date" id="perf-filter-to" />
+          </div>
+        </div>
+        <p id="stats-note" class="stats-note"></p>
+
+        <section class="panel panel-full">
+          <h2>Calls handled per agent</h2>
+          <div id="perf-calls-chart" class="chart-wrap"></div>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Average rating per agent</h2>
+          <div id="perf-rating-chart" class="chart-wrap"></div>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Agent details</h2>
+          <p class="stats-hint">Click an agent (or a bar above) for their full call history and recordings.</p>
+          <div id="stats-table" class="stats-table"></div>
+        </section>
+      </div>
+
+      <!-- USER MANAGEMENT -->
+      <div id="page-users" class="admin-page">
+        <section class="panel panel-full">
+          <h2>Password reset requests <span id="reset-requests-badge" class="count-badge hidden">0</span></h2>
+          <div id="reset-requests-list" class="agents-list">
+            <p class="empty-note">No pending requests.</p>
+          </div>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Agents</h2>
+          <div id="agents-list" class="agents-list"></div>
+
+          <form id="add-agent-form" class="add-agent-form">
+            <h3>Add agent</h3>
+            <div class="add-agent-row">
+              <input id="new-agent-name" type="text" placeholder="Name" maxlength="60" />
+              <input id="new-agent-password" type="text" placeholder="Password" maxlength="60" />
+              <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+            <p class="sub-tight">Which language(s) can they take calls in?</p>
+            <div id="new-agent-languages" class="lang-checkbox-row"></div>
+            <p id="add-agent-error" class="error hidden"></p>
+          </form>
+        </section>
+      </div>
+
+      <!-- CONFIGURATION -->
+      <div id="page-config" class="admin-page">
+        <section class="panel panel-full">
+          <h2>Video call configuration</h2>
+          <form id="hold-config-form" class="hold-config-form">
+            <label for="hold-config-max-seconds">Maximum hold duration</label>
+            <p class="sub-tight">When an agent puts a call on hold, it resumes on its own after this long if nobody resumes it first. The agent is warned 30 seconds before it expires.</p>
+            <div class="hold-config-row">
+              <input id="hold-config-max-seconds" type="number" min="10" max="3600" step="5" />
+              <span class="hold-config-unit">seconds</span>
+              <span id="hold-config-preview" class="hold-config-preview"></span>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+            <p id="hold-config-error" class="error hidden"></p>
+            <p id="hold-config-success" class="hint hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
+          <div class="panel-head-row">
+            <h2>Storage</h2>
+            <button type="button" id="btn-refresh-storage" class="btn-small">Refresh</button>
+          </div>
+          <div id="storage-panel">
+            <p id="storage-loading" class="sub-tight">Loading…</p>
+          </div>
+        </section>
+      </div>
+
+    </main>
+  </section>
+
+  <!-- AGENT DETAIL -->
+  <div id="agent-detail-modal" class="modal-overlay hidden">
+    <div class="modal-card agent-detail-card">
+      <div class="agent-detail-header">
+        <h2 id="agent-detail-name">—</h2>
+        <button type="button" id="btn-close-agent-detail" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div id="agent-detail-totals" class="agent-detail-totals"></div>
+      <div id="agent-detail-calls" class="agent-detail-calls"></div>
+    </div>
+  </div>
+
+  <!-- CHANGE PASSWORD -->
+  <div id="change-password-modal" class="modal-overlay hidden">
+    <form id="change-password-form" class="modal-card">
+      <h2>Change admin password</h2>
+      <p class="sub">Update the password used to sign in to this dashboard.</p>
+      <div class="modal-field">
+        <label for="cp-current">Current password</label>
+        <input id="cp-current" type="password" autocomplete="current-password" maxlength="60" />
+      </div>
+      <div class="modal-field">
+        <label for="cp-new">New password</label>
+        <input id="cp-new" type="password" autocomplete="new-password" maxlength="60" />
+      </div>
+      <div class="modal-field">
+        <label for="cp-confirm">Confirm new password</label>
+        <input id="cp-confirm" type="password" autocomplete="new-password" maxlength="60" />
+      </div>
+      <p id="change-password-error" class="error hidden"></p>
+      <p id="change-password-success" class="hint hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-change-password" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="admin.js"></script>
+</body>
+</html>
