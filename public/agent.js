@@ -46,6 +46,56 @@ let connectTimeoutHandle = null;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
 let recording = null; // active call-recording session, see startRecording() below
 
+// ---- Screen wake lock ------------------------------------------------
+// Keeps the device's screen from auto-locking while signed in, so the ring
+// tone and queue updates aren't silently suspended the moment a phone/tablet
+// times out (a locked screen freezes the whole tab — see the README's
+// "Staying connected" section). This is a browser API doing what an admin
+// would otherwise have to do by hand in the device's display settings, and
+// it degrades silently wherever it isn't supported (older Safari, some
+// in-app browsers) rather than blocking sign-in.
+let wakeLock = null;
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+    updateWakeLockIndicator();
+  } catch {
+    // Most commonly: the tab isn't visible right now (can't acquire one for
+    // a hidden document) or the browser/OS declined it (e.g. low battery on
+    // some platforms) — visibilitychange below retries once it's visible
+    // again, and there's no ring-tone functionality lost either way, just
+    // the extra safety net of the screen not needing to be kept on by hand.
+    wakeLock = null;
+    updateWakeLockIndicator();
+  }
+}
+function releaseWakeLock() {
+  if (wakeLock) wakeLock.release().catch(() => {});
+  wakeLock = null;
+}
+function updateWakeLockIndicator() {
+  const el = document.getElementById('wake-lock-indicator');
+  if (!el) return;
+  const supported = 'wakeLock' in navigator;
+  el.classList.toggle('hidden', !supported);
+  if (!supported) return;
+  el.classList.toggle('wake-lock-active', Boolean(wakeLock));
+  el.title = wakeLock
+    ? "Keeping this screen awake so you don't miss a call"
+    : "Couldn't keep the screen awake — check your device's display/lock settings";
+}
+// Re-request on becoming visible again: the API auto-releases whenever the
+// document goes hidden (tab switched away, app backgrounded), and the spec
+// gives no way to "resume" the same lock — a fresh request is the only way
+// back once the tab is visible again.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && screens['screen-dashboard'].classList.contains('active')) {
+    acquireWakeLock();
+  }
+});
+
 // ---- Call hold -----------------------------------------------------------
 let onHold = false;
 let holdDeadline = null; // ms epoch — when the current hold auto-resumes
@@ -290,6 +340,7 @@ function handleServerMessage(msg) {
       wsSend({ type: 'get-log' });
       wsSend({ type: 'get-chats' });
       refreshCallConfig(); // so the language list is ready before the first call, not just after answering one
+      acquireWakeLock();
       break;
 
     case 'agent-login-fail':
@@ -1213,6 +1264,7 @@ document.getElementById('btn-sign-out').addEventListener('click', () => {
   signedOutIntentionally = true;
   clearTimeout(reconnectTimer);
   sessionStorage.removeItem(STORAGE_KEY);
+  releaseWakeLock();
   try { if (ws) ws.close(); } catch { /* ignore */ }
   location.reload();
 });

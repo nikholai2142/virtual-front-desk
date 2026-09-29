@@ -92,6 +92,12 @@ html, body {
 .topbar-right { display: flex; align-items: center; gap: 8px; color: var(--sub); font-size: 14px; flex-shrink: 0; }
 .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--good); display: inline-block; flex-shrink: 0; }
 
+/* Screen wake-lock indicator — dim by default (lock not currently held,
+   e.g. right after sign-in before the request resolves, or unsupported
+   browser skips it via .hidden), lit up amber while actively holding it. */
+.wake-lock-indicator { font-size: 15px; opacity: 0.35; cursor: default; }
+.wake-lock-indicator.wake-lock-active { opacity: 1; filter: drop-shadow(0 0 3px rgba(246, 199, 106, 0.6)); }
+
 .view-tabs { display: flex; gap: 4px; }
 .view-tab {
   background: transparent; border: none; color: var(--sub); font-size: 14px;

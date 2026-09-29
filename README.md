@@ -389,6 +389,34 @@ Two things guard against this:
   next to your name in the top bar reflects this: green while connected,
   amber while it's reconnecting.
 
+### A locked phone/tablet screen is a harder problem — read this if agents use mobile
+
+**Once a device's screen locks, the browser tab is frozen by the OS** —
+timers stop, the ring tone's audio context is suspended, and eventually the
+WebSocket itself gets throttled. This isn't specific to this app: *no*
+website can make sound, show a notification, or run code once the screen is
+locked, because the OS itself pauses the browser to save battery. If an
+agent's phone locks while a guest is waiting, nothing will ring or notify
+them until they unlock it and the page catches back up.
+
+- **The dashboard requests a screen Wake Lock the moment you sign in**
+  (a small ☀ indicator lights up next to your name in the top bar while
+  it's held) — this keeps the device from auto-locking on its own timeout
+  for as long as the tab stays open and visible, the same way a video-call
+  app keeps your screen on during a call. It's a genuine fix for the most
+  common case (a phone or tablet timing out after sitting idle at the
+  desk), and it degrades silently on older browsers that don't support it
+  (the indicator just stays hidden).
+- **It cannot stop someone manually pressing the lock/power button**, and
+  on iPhone it only works in Safari 16.4+ (not older iOS versions, and not
+  every in-app browser). For a phone that agents actually carry around and
+  might deliberately lock, the only fully reliable fix is real push
+  notifications (a service worker + Web Push, or a native app) — a
+  meaningfully bigger project than this app currently takes on. In
+  practice, the most dependable setup is a dedicated tablet/phone that
+  stays plugged in and unlocked at the desk, same as a physical phone
+  system would.
+
 ## Call hold
 
 An agent can put an active call on hold from the **⏸ Hold** button next
