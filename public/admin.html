@@ -199,6 +199,18 @@
 
         <section class="panel panel-full">
           <div class="panel-head-row">
+            <h2>Languages</h2>
+            <button type="button" id="btn-save-languages" class="btn btn-primary btn-small">Save changes</button>
+          </div>
+          <p class="sub-tight">Turn on the languages you want available for tagging agents and for guests to pick on the kiosk. Only languages enabled here can be assigned to an agent — <span id="lang-enabled-count">—</span> currently on.</p>
+          <input id="lang-search" type="text" class="lang-search" placeholder="Search languages…" />
+          <div id="lang-catalog" class="lang-catalog"><p class="sub-tight">Loading…</p></div>
+          <p id="lang-catalog-error" class="error hidden"></p>
+          <p id="lang-catalog-success" class="hint hidden"></p>
+        </section>
+
+        <section class="panel panel-full">
+          <div class="panel-head-row">
             <h2>Storage</h2>
             <button type="button" id="btn-refresh-storage" class="btn-small">Refresh</button>
           </div>

@@ -460,17 +460,25 @@ ever hanging up.
   (outcome "transferred", not "ended"), and the agent who eventually
   closes it out gets their own separate entry. Nothing about a transfer
   is invisible in the Agent Performance numbers.
-- **The supported language list is a fixed set** you edit directly in
-  `server.js` (the `SUPPORTED_LANGUAGES` array near the top) — it's the
-  single source of truth every client reads from `/api/call-config`, so
-  there's no separate list to keep in sync. Ships with English, Spanish,
-  French, German, Mandarin, Japanese, Korean, Arabic, Portuguese, Russian,
-  Italian, and Hindi; add, remove, or rename entries there to match your
-  property. `/api/call-config` actually exposes two versions of it: the
-  full fixed list (`allLanguages`, what the admin dashboard's language
+- **Which languages are available to tag agents with is admin-editable —
+  no code change needed.** Admin dashboard → Configuration → **Languages**
+  lists the full ISO 639-1 catalog (~180 languages) with a checkbox per
+  language and a search box; toggle any on/off and hit Save. English can't
+  be turned off (every install needs at least one guaranteed language), and
+  you can't disable a language an agent is still tagged with — retag them
+  first, and the error message tells you who. This replaces the old
+  approach of editing a fixed array in `server.js` directly. The enabled
+  set is stored in the same app config as the max-hold-duration setting
+  (`config.json` locally, or Redis when you've set that up — see
+  "Persistent storage" below), so it survives restarts and redeploys the
+  same way.
+- `/api/call-config` exposes two versions of the language list, both
+  scoped to what's currently *enabled* (never the disabled ones): the
+  full enabled list (`allLanguages`, what the admin dashboard's language
   checkboxes/chips use, so you can tag a first-of-its-kind language) and
   the roster-scoped one (`languages`, what the kiosk picker and an agent's
-  Transfer-target dropdown use, as described above).
+  Transfer-target dropdown use — only languages some agent is actually
+  tagged for, as described above).
 - **Agents created before this feature existed** are migrated to the base
   language (English by default) the first time the server starts after
   upgrading, so nobody's calls silently stop routing to them.
@@ -603,6 +611,9 @@ else:
 ### Configuration
 
 - **Maximum hold duration** — see "Call hold" above.
+- **Languages** — turn on/off which of the ~180 ISO 639-1 languages are
+  available for tagging agents and for guests to pick on the kiosk; see
+  "Multi-language support & call transfer" above.
 - **Storage** — how much recording storage is currently in use, and where;
   see "Storage usage" under "Call recordings" below.
 

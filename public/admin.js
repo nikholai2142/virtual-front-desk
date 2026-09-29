@@ -56,7 +56,7 @@ function showAdminPage(pageId) {
   // shown — everything else is already kept fresh by refreshAll()'s poll.
   if (pageId === 'page-overview' && adminPassword) loadOverview();
   if (pageId === 'page-performance' && adminPassword) loadPerformanceStats();
-  if (pageId === 'page-config' && adminPassword) loadStorage();
+  if (pageId === 'page-config' && adminPassword) { loadStorage(); loadLanguageCatalog(); }
 }
 
 document.querySelectorAll('.nav-btn').forEach((btn) => {
@@ -876,6 +876,104 @@ function formatDuration(totalSeconds) {
   const s = totalSeconds % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+// ---- Languages (world-language catalog: which are enabled for tagging) ----
+// The full ~180-language ISO catalog, each flagged enabled/disabled — kept
+// separate from `availableLanguages` above (which is already scoped to just
+// the enabled ones, for agent-tagging chips/checkboxes elsewhere on this
+// page). This panel is where that enabled set actually gets edited.
+let languageCatalog = [];
+let languageCatalogDirty = false; // true once the admin has toggled something since the last load/save
+
+function renderLanguageCatalog() {
+  const box = document.getElementById('lang-catalog');
+  const countEl = document.getElementById('lang-enabled-count');
+  const query = document.getElementById('lang-search').value.trim().toLowerCase();
+  const enabledCount = languageCatalog.filter((l) => l.enabled).length;
+  countEl.textContent = `${enabledCount} language${enabledCount === 1 ? '' : 's'}`;
+
+  const filtered = query
+    ? languageCatalog.filter((l) => l.label.toLowerCase().includes(query) || l.code.toLowerCase().includes(query))
+    : languageCatalog;
+
+  if (!filtered.length) {
+    box.innerHTML = '<p class="lang-catalog-empty">No languages match your search.</p>';
+    return;
+  }
+  box.innerHTML = filtered.map((l) => {
+    const isDefault = l.code === 'en';
+    return `
+      <label class="lang-catalog-item${isDefault ? ' is-default' : ''}">
+        <input type="checkbox" data-code="${escapeHtml(l.code)}" ${l.enabled ? 'checked' : ''} ${isDefault ? 'disabled' : ''} />
+        ${escapeHtml(l.label)}${isDefault ? ' <span class="lang-default-tag">(always on)</span>' : ''}
+      </label>
+    `;
+  }).join('');
+  box.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const entry = languageCatalog.find((l) => l.code === cb.dataset.code);
+      if (entry) entry.enabled = cb.checked;
+      languageCatalogDirty = true;
+      const enabledNow = languageCatalog.filter((l) => l.enabled).length;
+      countEl.textContent = `${enabledNow} language${enabledNow === 1 ? '' : 's'}`;
+    });
+  });
+}
+
+async function loadLanguageCatalog() {
+  const box = document.getElementById('lang-catalog');
+  try {
+    const data = await api('/api/admin/languages');
+    languageCatalog = data.languages;
+    languageCatalogDirty = false;
+    renderLanguageCatalog();
+  } catch (err) {
+    box.innerHTML = `<p class="lang-catalog-empty">Could not load the language list: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+document.getElementById('lang-search').addEventListener('input', renderLanguageCatalog);
+
+document.getElementById('btn-save-languages').addEventListener('click', async () => {
+  const errEl = document.getElementById('lang-catalog-error');
+  const okEl = document.getElementById('lang-catalog-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  if (!languageCatalogDirty) {
+    okEl.textContent = 'Nothing to save.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 1800);
+    return;
+  }
+  const enabled = languageCatalog.filter((l) => l.enabled).map((l) => l.code);
+  const btn = document.getElementById('btn-save-languages');
+  btn.disabled = true;
+  try {
+    const result = await api('/api/admin/languages', { method: 'POST', body: JSON.stringify({ enabled }) });
+    languageCatalog = result.languages;
+    languageCatalogDirty = false;
+    warnIfNotPersisted(result);
+    renderLanguageCatalog();
+    okEl.textContent = 'Saved. Agent-tagging and the kiosk picker now reflect this list.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 2500);
+    // The agent-tagging chips and Add Agent checkboxes elsewhere on this page
+    // read from `availableLanguages` (the enabled subset via /api/call-config)
+    // — refresh that and re-render so they don't keep offering a language
+    // that was just turned off, or miss one that was just turned on.
+    try {
+      const cfg = await (await fetch('/api/call-config')).json();
+      if (Array.isArray(cfg.allLanguages) && cfg.allLanguages.length) availableLanguages = cfg.allLanguages;
+      renderAddAgentLanguageOptions();
+      refreshAll();
+    } catch { /* non-fatal — the next scheduled refresh/page load will pick it up */ }
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---- Storage (R2 usage, or local recordings-disk usage as a fallback) ----
 

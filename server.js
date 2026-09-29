@@ -86,35 +86,105 @@ async function saveAgents() {
 }
 
 // ---- Languages -----------------------------------------------------------
-// A fixed list a hotel picks from when tagging an agent's language(s) and
-// when a guest picks theirs on the kiosk. Edit this list to match your
-// property's needs — it's the single source of truth for every client
-// (served over /api/call-config, so kiosk.js/agent.js/admin.js never need
-// their own copy and can't drift out of sync with it).
-const SUPPORTED_LANGUAGES = [
-  { code: 'en', label: 'English' },
-  { code: 'es', label: 'Spanish' },
-  { code: 'fr', label: 'French' },
-  { code: 'de', label: 'German' },
-  { code: 'zh', label: 'Mandarin' },
-  { code: 'ja', label: 'Japanese' },
-  { code: 'ko', label: 'Korean' },
-  { code: 'ar', label: 'Arabic' },
-  { code: 'pt', label: 'Portuguese' },
-  { code: 'ru', label: 'Russian' },
-  { code: 'it', label: 'Italian' },
-  { code: 'hi', label: 'Hindi' },
+// WORLD_LANGUAGES is the full ISO 639-1 catalog (~180 languages) — every
+// language the admin dashboard *could* turn on, not what any one property
+// actually uses. Which subset is actually offered for tagging agents and
+// picked by guests is admin-editable at runtime (CONFIG.enabledLanguages,
+// managed from Configuration > Languages, POST /api/admin/languages) rather
+// than a fixed list baked into this file, so growing or shrinking the active
+// set no longer needs a code change or redeploy.
+const WORLD_LANGUAGES = [
+  { code: 'aa', label: 'Afar' }, { code: 'ab', label: 'Abkhazian' }, { code: 'af', label: 'Afrikaans' },
+  { code: 'ak', label: 'Akan' }, { code: 'am', label: 'Amharic' }, { code: 'an', label: 'Aragonese' },
+  { code: 'ar', label: 'Arabic' }, { code: 'as', label: 'Assamese' }, { code: 'av', label: 'Avaric' },
+  { code: 'ay', label: 'Aymara' }, { code: 'az', label: 'Azerbaijani' }, { code: 'ba', label: 'Bashkir' },
+  { code: 'be', label: 'Belarusian' }, { code: 'bg', label: 'Bulgarian' }, { code: 'bh', label: 'Bihari' },
+  { code: 'bi', label: 'Bislama' }, { code: 'bm', label: 'Bambara' }, { code: 'bn', label: 'Bengali' },
+  { code: 'bo', label: 'Tibetan' }, { code: 'br', label: 'Breton' }, { code: 'bs', label: 'Bosnian' },
+  { code: 'ca', label: 'Catalan' }, { code: 'ce', label: 'Chechen' }, { code: 'ch', label: 'Chamorro' },
+  { code: 'co', label: 'Corsican' }, { code: 'cr', label: 'Cree' }, { code: 'cs', label: 'Czech' },
+  { code: 'cu', label: 'Church Slavic' }, { code: 'cv', label: 'Chuvash' }, { code: 'cy', label: 'Welsh' },
+  { code: 'da', label: 'Danish' }, { code: 'de', label: 'German' }, { code: 'dv', label: 'Divehi' },
+  { code: 'dz', label: 'Dzongkha' }, { code: 'ee', label: 'Ewe' }, { code: 'el', label: 'Greek' },
+  { code: 'en', label: 'English' }, { code: 'eo', label: 'Esperanto' }, { code: 'es', label: 'Spanish' },
+  { code: 'et', label: 'Estonian' }, { code: 'eu', label: 'Basque' }, { code: 'fa', label: 'Persian' },
+  { code: 'ff', label: 'Fulah' }, { code: 'fi', label: 'Finnish' }, { code: 'fj', label: 'Fijian' },
+  { code: 'fo', label: 'Faroese' }, { code: 'fr', label: 'French' }, { code: 'fy', label: 'Western Frisian' },
+  { code: 'ga', label: 'Irish' }, { code: 'gd', label: 'Scottish Gaelic' }, { code: 'gl', label: 'Galician' },
+  { code: 'gn', label: 'Guarani' }, { code: 'gu', label: 'Gujarati' }, { code: 'gv', label: 'Manx' },
+  { code: 'ha', label: 'Hausa' }, { code: 'he', label: 'Hebrew' }, { code: 'hi', label: 'Hindi' },
+  { code: 'ho', label: 'Hiri Motu' }, { code: 'hr', label: 'Croatian' }, { code: 'ht', label: 'Haitian Creole' },
+  { code: 'hu', label: 'Hungarian' }, { code: 'hy', label: 'Armenian' }, { code: 'hz', label: 'Herero' },
+  { code: 'ia', label: 'Interlingua' }, { code: 'id', label: 'Indonesian' }, { code: 'ie', label: 'Interlingue' },
+  { code: 'ig', label: 'Igbo' }, { code: 'ii', label: 'Sichuan Yi' }, { code: 'ik', label: 'Inupiaq' },
+  { code: 'io', label: 'Ido' }, { code: 'is', label: 'Icelandic' }, { code: 'it', label: 'Italian' },
+  { code: 'iu', label: 'Inuktitut' }, { code: 'ja', label: 'Japanese' }, { code: 'jv', label: 'Javanese' },
+  { code: 'ka', label: 'Georgian' }, { code: 'kg', label: 'Kongo' }, { code: 'ki', label: 'Kikuyu' },
+  { code: 'kj', label: 'Kuanyama' }, { code: 'kk', label: 'Kazakh' }, { code: 'kl', label: 'Kalaallisut' },
+  { code: 'km', label: 'Khmer' }, { code: 'kn', label: 'Kannada' }, { code: 'ko', label: 'Korean' },
+  { code: 'kr', label: 'Kanuri' }, { code: 'ks', label: 'Kashmiri' }, { code: 'ku', label: 'Kurdish' },
+  { code: 'kv', label: 'Komi' }, { code: 'kw', label: 'Cornish' }, { code: 'ky', label: 'Kyrgyz' },
+  { code: 'la', label: 'Latin' }, { code: 'lb', label: 'Luxembourgish' }, { code: 'lg', label: 'Ganda' },
+  { code: 'li', label: 'Limburgish' }, { code: 'ln', label: 'Lingala' }, { code: 'lo', label: 'Lao' },
+  { code: 'lt', label: 'Lithuanian' }, { code: 'lu', label: 'Luba-Katanga' }, { code: 'lv', label: 'Latvian' },
+  { code: 'mg', label: 'Malagasy' }, { code: 'mh', label: 'Marshallese' }, { code: 'mi', label: 'Maori' },
+  { code: 'mk', label: 'Macedonian' }, { code: 'ml', label: 'Malayalam' }, { code: 'mn', label: 'Mongolian' },
+  { code: 'mr', label: 'Marathi' }, { code: 'ms', label: 'Malay' }, { code: 'mt', label: 'Maltese' },
+  { code: 'my', label: 'Burmese' }, { code: 'na', label: 'Nauru' }, { code: 'nb', label: 'Norwegian Bokmål' },
+  { code: 'nd', label: 'North Ndebele' }, { code: 'ne', label: 'Nepali' }, { code: 'ng', label: 'Ndonga' },
+  { code: 'nl', label: 'Dutch' }, { code: 'nn', label: 'Norwegian Nynorsk' }, { code: 'no', label: 'Norwegian' },
+  { code: 'nr', label: 'South Ndebele' }, { code: 'nv', label: 'Navajo' }, { code: 'ny', label: 'Chichewa' },
+  { code: 'oc', label: 'Occitan' }, { code: 'oj', label: 'Ojibwe' }, { code: 'om', label: 'Oromo' },
+  { code: 'or', label: 'Odia' }, { code: 'os', label: 'Ossetian' }, { code: 'pa', label: 'Punjabi' },
+  { code: 'pi', label: 'Pali' }, { code: 'pl', label: 'Polish' }, { code: 'ps', label: 'Pashto' },
+  { code: 'pt', label: 'Portuguese' }, { code: 'qu', label: 'Quechua' }, { code: 'rm', label: 'Romansh' },
+  { code: 'rn', label: 'Kirundi' }, { code: 'ro', label: 'Romanian' }, { code: 'ru', label: 'Russian' },
+  { code: 'rw', label: 'Kinyarwanda' }, { code: 'sa', label: 'Sanskrit' }, { code: 'sc', label: 'Sardinian' },
+  { code: 'sd', label: 'Sindhi' }, { code: 'se', label: 'Northern Sami' }, { code: 'sg', label: 'Sango' },
+  { code: 'si', label: 'Sinhala' }, { code: 'sk', label: 'Slovak' }, { code: 'sl', label: 'Slovenian' },
+  { code: 'sm', label: 'Samoan' }, { code: 'sn', label: 'Shona' }, { code: 'so', label: 'Somali' },
+  { code: 'sq', label: 'Albanian' }, { code: 'sr', label: 'Serbian' }, { code: 'ss', label: 'Swati' },
+  { code: 'st', label: 'Southern Sotho' }, { code: 'su', label: 'Sundanese' }, { code: 'sv', label: 'Swedish' },
+  { code: 'sw', label: 'Swahili' }, { code: 'ta', label: 'Tamil' }, { code: 'te', label: 'Telugu' },
+  { code: 'tg', label: 'Tajik' }, { code: 'th', label: 'Thai' }, { code: 'ti', label: 'Tigrinya' },
+  { code: 'tk', label: 'Turkmen' }, { code: 'tl', label: 'Tagalog' }, { code: 'tn', label: 'Tswana' },
+  { code: 'to', label: 'Tongan' }, { code: 'tr', label: 'Turkish' }, { code: 'ts', label: 'Tsonga' },
+  { code: 'tt', label: 'Tatar' }, { code: 'tw', label: 'Twi' }, { code: 'ty', label: 'Tahitian' },
+  { code: 'ug', label: 'Uyghur' }, { code: 'uk', label: 'Ukrainian' }, { code: 'ur', label: 'Urdu' },
+  { code: 'uz', label: 'Uzbek' }, { code: 've', label: 'Venda' }, { code: 'vi', label: 'Vietnamese' },
+  { code: 'vo', label: 'Volapük' }, { code: 'wa', label: 'Walloon' }, { code: 'wo', label: 'Wolof' },
+  { code: 'xh', label: 'Xhosa' }, { code: 'yi', label: 'Yiddish' }, { code: 'yo', label: 'Yoruba' },
+  { code: 'za', label: 'Zhuang' }, { code: 'zh', label: 'Chinese (Mandarin)' }, { code: 'zu', label: 'Zulu' },
 ];
-const SUPPORTED_LANGUAGE_CODES = new Set(SUPPORTED_LANGUAGES.map((l) => l.code));
+const WORLD_LANGUAGE_CODES = new Set(WORLD_LANGUAGES.map((l) => l.code));
+const WORLD_LANGUAGE_LABEL = new Map(WORLD_LANGUAGES.map((l) => [l.code, l.label]));
 const DEFAULT_LANGUAGE = 'en';
-function languageLabel(code) {
-  const entry = SUPPORTED_LANGUAGES.find((l) => l.code === code);
-  return entry ? entry.label : code;
+// What a brand-new install starts out with enabled — the same 12 this
+// project shipped with before the world catalog existed. Just a starting
+// point: the admin can enable/disable anything from here on (see
+// CONFIG.enabledLanguages, below, and the Configuration > Languages panel).
+const DEFAULT_ENABLED_LANGUAGES = ['en', 'es', 'fr', 'de', 'zh', 'ja', 'ko', 'ar', 'pt', 'ru', 'it', 'hi'];
+
+/** The set of language codes an admin currently has switched on — always includes the default, so the picker/tagging UI can never end up with zero usable options. */
+function enabledLanguageCodes() {
+  const stored = Array.isArray(CONFIG.enabledLanguages) ? CONFIG.enabledLanguages : DEFAULT_ENABLED_LANGUAGES;
+  const codes = new Set(stored.filter((c) => WORLD_LANGUAGE_CODES.has(c)));
+  codes.add(DEFAULT_LANGUAGE);
+  return codes;
 }
-/** Filters+dedupes a client-supplied language list down to only recognized codes. */
+/** {code,label} entries for just the currently-enabled languages, in WORLD_LANGUAGES order. This is what kiosk.js/agent.js/admin.js's agent-tagging UI see as "the" language list. */
+function supportedLanguages() {
+  const codes = enabledLanguageCodes();
+  return WORLD_LANGUAGES.filter((l) => codes.has(l.code));
+}
+function languageLabel(code) {
+  return WORLD_LANGUAGE_LABEL.get(code) || code;
+}
+/** Filters+dedupes a client-supplied language list down to only currently-enabled codes. */
 function normalizeLanguages(input) {
   if (!Array.isArray(input)) return [];
-  return [...new Set(input.filter((c) => SUPPORTED_LANGUAGE_CODES.has(c)))];
+  const codes = enabledLanguageCodes();
+  return [...new Set(input.filter((c) => codes.has(c)))];
 }
 
 // ---- Admin dashboard auth ---------------------------------------------
@@ -149,7 +219,7 @@ async function saveAdminPassword(password) {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DEFAULT_CONFIG = { maxHoldSeconds: 300 }; // 5 minutes
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES }; // 5 minutes
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
 function readLocalConfigFile() {
@@ -716,7 +786,7 @@ function transferCall(callId, { note, language, fromAgentName }) {
   // the wait clock all start fresh for this next leg (the segment that just
   // ended already captured its own copies above), while the transfer
   // context carries forward so the next agent has it.
-  call.language = SUPPORTED_LANGUAGE_CODES.has(language) ? language : call.language;
+  call.language = enabledLanguageCodes().has(language) ? language : call.language;
   call.transferredFrom = fromAgentName;
   call.transferNote = note || null;
   call.transferCount = (call.transferCount || 0) + 1;
@@ -1064,16 +1134,18 @@ function handleCallConfig(req, res) {
   // this doesn't flicker as people log in and out). This is what the kiosk's
   // language picker and an agent's Transfer-target dropdown show, since
   // offering a language nobody on the roster speaks would be a dead end.
-  // `allLanguages` is the full fixed list regardless of who's tagged for
-  // what — the admin dashboard needs that one, so a property can tag its
-  // first agent for a brand-new language rather than being unable to.
+  // `allLanguages` is every language the admin currently has enabled
+  // (Configuration > Languages), regardless of who's tagged for what — the
+  // admin dashboard needs that one, so a property can tag its first agent
+  // for a language nobody's using yet, without being limited to `languages`.
   const activeCodes = new Set();
   for (const a of AGENTS) {
     if (Array.isArray(a.languages)) for (const code of a.languages) activeCodes.add(code);
   }
-  let languages = SUPPORTED_LANGUAGES.filter((l) => activeCodes.has(l.code));
-  if (!languages.length) languages = SUPPORTED_LANGUAGES.filter((l) => l.code === DEFAULT_LANGUAGE); // safety net if somehow no agent has any language tagged (e.g. every agent was just deleted)
-  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds, languages, allLanguages: SUPPORTED_LANGUAGES });
+  const enabled = supportedLanguages();
+  let languages = enabled.filter((l) => activeCodes.has(l.code));
+  if (!languages.length) languages = enabled.filter((l) => l.code === DEFAULT_LANGUAGE); // safety net if somehow no agent has any language tagged (e.g. every agent was just deleted)
+  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds, languages, allLanguages: enabled });
 }
 
 async function handleTurnCredentials(req, res) {
@@ -1537,7 +1609,7 @@ async function handleAdminApi(req, res, urlObj) {
     const languages = normalizeLanguages(body.languages);
     AGENTS.push({ id: crypto.randomUUID(), name, password, languages: languages.length ? languages : [DEFAULT_LANGUAGE] });
     const persisted = await saveAgents();
-    sendJson(res, 201, { agents: AGENTS, persisted, persistenceConfigured: store.configured, languages: SUPPORTED_LANGUAGES });
+    sendJson(res, 201, { agents: AGENTS, persisted, persistenceConfigured: store.configured, languages: supportedLanguages() });
     return;
   }
 
@@ -1600,6 +1672,55 @@ async function handleAdminApi(req, res, urlObj) {
     CONFIG = { ...CONFIG, maxHoldSeconds };
     const persisted = await saveConfig();
     sendJson(res, 200, { config: CONFIG, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  // The full world-language catalog, each flagged with whether it's
+  // currently enabled — powers the dashboard's Configuration > Languages
+  // panel, where a property turns languages on/off without touching code.
+  if (urlObj.pathname === '/api/admin/languages' && req.method === 'GET') {
+    const enabled = enabledLanguageCodes();
+    sendJson(res, 200, {
+      languages: WORLD_LANGUAGES.map((l) => ({ ...l, enabled: enabled.has(l.code) })),
+      defaultLanguage: DEFAULT_LANGUAGE,
+    });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/languages' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    if (!Array.isArray(body.enabled)) { sendJson(res, 400, { error: '"enabled" must be an array of language codes' }); return; }
+    const requested = new Set(body.enabled.filter((c) => WORLD_LANGUAGE_CODES.has(c)));
+    requested.add(DEFAULT_LANGUAGE); // can't be turned off — every install needs at least one guaranteed language
+
+    // Refuse to disable a language some agent is still tagged with — that
+    // agent would silently lose a language guests can no longer pick or tag
+    // them for. Ask the admin to retag those agents first instead of
+    // quietly breaking their assignment.
+    const stillInUse = new Map(); // code -> [agent names]
+    for (const a of AGENTS) {
+      if (!Array.isArray(a.languages)) continue;
+      for (const code of a.languages) {
+        if (!requested.has(code)) {
+          if (!stillInUse.has(code)) stillInUse.set(code, []);
+          stillInUse.get(code).push(a.name);
+        }
+      }
+    }
+    if (stillInUse.size) {
+      const detail = [...stillInUse.entries()].map(([code, names]) => `${languageLabel(code)} (${names.join(', ')})`).join('; ');
+      sendJson(res, 409, { error: `Can't disable a language still assigned to an agent — retag them first: ${detail}` });
+      return;
+    }
+
+    CONFIG = { ...CONFIG, enabledLanguages: [...requested] };
+    const persisted = await saveConfig();
+    sendJson(res, 200, {
+      languages: WORLD_LANGUAGES.map((l) => ({ ...l, enabled: requested.has(l.code) })),
+      persisted,
+      persistenceConfigured: store.configured,
+    });
     return;
   }
 
@@ -1785,7 +1906,7 @@ function handleGuestConnection(conn) {
       calls.set(callId, {
         topic: (msg.topic || 'General').slice(0, 60),
         kioskId: String(msg.kioskId || '').trim().slice(0, 40) || 'Unnamed kiosk',
-        language: SUPPORTED_LANGUAGE_CODES.has(msg.language) ? msg.language : DEFAULT_LANGUAGE,
+        language: enabledLanguageCodes().has(msg.language) ? msg.language : DEFAULT_LANGUAGE,
         guestConn: conn,
         agentConn: null,
         agentName: null,
