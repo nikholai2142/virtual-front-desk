@@ -43,6 +43,14 @@ const CONNECT_TIMEOUT_MS = 15 * 1000; // if WebRTC never reaches "connected" in 
 // a kiosk that reboots has to sign in again — which also frees up the
 // session slot if the device lost power without signing out cleanly.
 const KIOSK_PASSWORD_STORAGE_KEY = 'vfd_kiosk_password';
+// Handed back by the server on kiosk-login-ok and replayed on every
+// relogin attempt (manual retype or the automatic isReconnect kind). It's
+// how the server tells a page-refresh reconnect (same session, brand-new
+// WebSocket) apart from a genuinely different device signing in with the
+// same password — see the isSameSessionReconnect comment in server.js's
+// kiosk-login handler for why that distinction needs a token rather than
+// just noticing the old connection is still registered.
+const KIOSK_SESSION_TOKEN_STORAGE_KEY = 'vfd_kiosk_session_token';
 const KIOSK_LOGIN_TIMEOUT_MS = 20000; // Render free-tier cold starts can take ~30-60s;
                                        // this at least turns a silent hang into a visible message.
 const KIOSK_RECONNECT_MS = 4000; // fixed interval — simpler than agent.js's exponential
@@ -94,7 +102,8 @@ function loginKiosk(password, { isReconnect = false } = {}) {
 
   connectWS()
     .then(() => {
-      wsSend({ type: 'kiosk-login', password });
+      const sessionToken = sessionStorage.getItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
+      wsSend({ type: 'kiosk-login', password, sessionToken: sessionToken || undefined });
       clearTimeout(kioskLoginTimeoutHandle);
       kioskLoginTimeoutHandle = setTimeout(() => {
         if (kioskLoginInProgress) {
@@ -197,16 +206,24 @@ let availableLanguages = [{ code: 'en', label: 'English' }];
 let currentLanguage = 'en';
 let pendingTopic = null;
 
-async function loadLanguages() {
+async function loadCallConfig() {
   try {
     const res = await fetch('/api/call-config');
     const data = await res.json();
     if (Array.isArray(data.languages) && data.languages.length) availableLanguages = data.languages;
+    // Admin-configurable logo size (Configuration > Kiosk appearance) — a
+    // CSS custom property so .brand-mark (kiosk.css) picks it up for both
+    // the login and idle screens' logos in one place. Falls back to
+    // kiosk.css's own 72px default if this is missing/invalid.
+    const logoSize = Number(data.logoSizePx);
+    if (Number.isFinite(logoSize) && logoSize > 0) {
+      document.documentElement.style.setProperty('--logo-size', `${logoSize}px`);
+    }
   } catch (err) {
-    console.warn('Could not fetch language list, defaulting to English only:', err);
+    console.warn('Could not fetch call config, defaulting to English only / 72px logo:', err);
   }
 }
-loadLanguages();
+loadCallConfig();
 
 // ---- Post-call rating ----
 let currentCallId = null;
@@ -279,6 +296,7 @@ async function handleServerMessage(msg) {
       setKioskLoginMessage(null);
       kioskName = msg.name;
       sessionStorage.setItem(KIOSK_PASSWORD_STORAGE_KEY, lastKioskLoginPassword);
+      if (msg.sessionToken) sessionStorage.setItem(KIOSK_SESSION_TOKEN_STORAGE_KEY, msg.sessionToken);
       document.getElementById('kiosk-id-label').textContent = kioskName;
       applyKioskBranding(msg.branding);
       showScreen('screen-idle');
@@ -288,6 +306,7 @@ async function handleServerMessage(msg) {
       kioskLoginInProgress = false;
       clearTimeout(kioskLoginTimeoutHandle);
       sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
+      sessionStorage.removeItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
       applyKioskBranding(null); // back to the site-wide default look
       showScreen('screen-kiosk-setup');
       if (msg.reason === 'already-active') {
@@ -299,6 +318,7 @@ async function handleServerMessage(msg) {
 
     case 'kiosk-logout-ok':
       kioskName = null;
+      sessionStorage.removeItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
       document.getElementById('kiosk-login-input').value = '';
       setKioskLoginMessage(null);
       applyKioskBranding(null); // back to the site-wide default look
@@ -308,6 +328,7 @@ async function handleServerMessage(msg) {
     case 'kiosk-forced-logout':
       kioskName = null;
       sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
+      sessionStorage.removeItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
       cleanupCall();
       applyKioskBranding(null); // back to the site-wide default look
       showScreen('screen-kiosk-setup');
@@ -666,6 +687,7 @@ document.getElementById('kiosk-login-form').addEventListener('submit', (e) => {
 document.getElementById('btn-kiosk-sign-out').addEventListener('click', () => {
   wsSend({ type: 'kiosk-logout' });
   sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
+  sessionStorage.removeItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
   // Optimistic — the server's kiosk-logout-ok ack (handled above) lands
   // shortly after and is a harmless no-op by then.
   kioskName = null;

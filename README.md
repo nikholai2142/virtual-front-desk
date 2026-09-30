@@ -655,6 +655,11 @@ else:
   at `/agent` right away, no restart needed).
 - **Remove an agent** — click "Remove" on any agent's row (asks for
   confirmation first).
+- **Change an agent's password** — click "Change password" on their row and
+  set a new one directly (at least 4 characters) — no need to wait for them
+  to request a reset. They start using it on their next sign-in; any
+  session they're already signed in on keeps working until they sign out
+  or the connection drops.
 - **Change an agent's language(s)** — click any language chip on their row
   to toggle it on/off; saves immediately, no separate edit mode. See
   "Multi-language support & call transfer" below.
@@ -668,6 +673,12 @@ else:
   - **Remove a kiosk** — click "Remove" on its row (asks for confirmation
     first). If that account is currently signed in on a device, that
     device is immediately signed out.
+  - **Change a kiosk's password** — click "Change password" on its row and
+    set a new one directly. Unlike an agent's password change, this also
+    immediately signs out any device currently signed in on that account
+    (its stored password for auto-relogin would otherwise silently stop
+    working the next time it reconnects) — so the physical kiosk will show
+    its sign-in screen again until someone enters the new password.
   - **Signed in / Not signed in** — a live status chip on each row shows
     whether that kiosk account currently has an active device session
     (see "Single session per kiosk" under "Multiple kiosks" above).
@@ -689,6 +700,13 @@ else:
   "Multi-language support & call transfer" above.
 - **Storage** — how much recording storage is currently in use, and where;
   see "Storage usage" under "Call recordings" below.
+- **Kiosk appearance (logo size)** — set the pixel size (24–320px) of the
+  logo shown on the kiosk's sign-in and idle screens. This is the
+  site-wide default; a kiosk with its own uploaded logo (see "Per-kiosk
+  branding" above) is still sized by this setting, so raising it there
+  enlarges every kiosk's logo — custom or default — at once. Applies live
+  to any kiosk already sitting on its sign-in/idle screen, no reload
+  needed.
 
 ### Password resets
 

@@ -214,6 +214,22 @@
         </section>
 
         <section class="panel panel-full">
+          <h2>Kiosk appearance</h2>
+          <form id="logo-size-form" class="hold-config-form">
+            <label for="logo-size-input">Logo size</label>
+            <p class="sub-tight">Size of the logo shown on the kiosk's sign-in and idle screens (site-wide default — a kiosk with its own uploaded logo via Kiosk accounts → Branding… still uses this size).</p>
+            <div class="hold-config-row">
+              <input id="logo-size-input" type="number" min="24" max="320" step="4" />
+              <span class="hold-config-unit">px</span>
+              <span id="logo-size-preview" class="hold-config-preview"></span>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+            <p id="logo-size-error" class="error hidden"></p>
+            <p id="logo-size-success" class="hint hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
           <div class="panel-head-row">
             <h2>Languages</h2>
             <button type="button" id="btn-save-languages" class="btn btn-primary btn-small">Save changes</button>
@@ -272,6 +288,24 @@
       <p id="change-password-success" class="hint hidden"></p>
       <div class="modal-actions">
         <button type="button" id="btn-cancel-change-password" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- CHANGE AGENT/KIOSK PASSWORD -->
+  <div id="change-user-password-modal" class="modal-overlay hidden">
+    <form id="change-user-password-form" class="modal-card">
+      <h2>Change password — <span id="cup-name">—</span></h2>
+      <p class="sub">Set a new password for this <span id="cup-kind">agent</span>. They'll need it the next time they sign in.</p>
+      <div class="modal-field">
+        <label for="cup-new">New password</label>
+        <input id="cup-new" type="text" autocomplete="off" maxlength="60" placeholder="At least 4 characters" />
+      </div>
+      <p id="cup-error" class="error hidden"></p>
+      <p id="cup-success" class="hint hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-user-password" class="btn btn-secondary">Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>

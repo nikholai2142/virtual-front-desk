@@ -287,9 +287,11 @@ async function saveAdminPassword(password) {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES }; // 5 minutes
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72 }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
+const MIN_LOGO_SIZE_PX = 24;
+const MAX_LOGO_SIZE_PX = 320;
 function readLocalConfigFile() {
   try {
     return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
@@ -1223,7 +1225,7 @@ function handleCallConfig(req, res) {
   const enabled = supportedLanguages();
   let languages = enabled.filter((l) => activeCodes.has(l.code));
   if (!languages.length) languages = enabled.filter((l) => l.code === DEFAULT_LANGUAGE); // safety net if somehow no agent has any language tagged (e.g. every agent was just deleted)
-  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds, languages, allLanguages: enabled });
+  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds, logoSizePx: CONFIG.logoSizePx, languages, allLanguages: enabled });
 }
 
 async function handleTurnCredentials(req, res) {
@@ -1721,6 +1723,29 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // Directly set an agent's password — same validation as the password-reset
+  // flow's resolve step (see resolveResetMatch below), but callable any time
+  // rather than only against a pending reset request, for when an admin just
+  // wants to rotate a password proactively.
+  const agentPasswordMatch = urlObj.pathname.match(/^\/api\/admin\/agents\/([^/]+)\/password$/);
+  if (agentPasswordMatch && req.method === 'POST') {
+    const id = decodeURIComponent(agentPasswordMatch[1]);
+    const agent = AGENTS.find((a) => a.id === id);
+    if (!agent) { sendJson(res, 404, { error: 'no agent with that id' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const password = String(body.password || '').trim().slice(0, 60);
+    if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
+    if (AGENTS.some((a) => a.id !== id && a.password === password)) {
+      sendJson(res, 409, { error: 'that password is already in use by another agent' });
+      return;
+    }
+    agent.password = password;
+    const persisted = await saveAgents();
+    sendJson(res, 200, { agents: AGENTS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
   const agentDetailMatch = urlObj.pathname.match(/^\/api\/admin\/agents\/([^/]+)\/detail$/);
   if (agentDetailMatch && req.method === 'GET') {
     const id = decodeURIComponent(agentDetailMatch[1]);
@@ -1869,6 +1894,42 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // Directly set a kiosk account's password. Unlike an agent's password
+  // change, this also force-signs-out any device currently signed in on
+  // that account: its live connection would keep working (auth is only
+  // checked at login time), but its stored password for auto-relogin on
+  // the next reconnect would silently stop working — better to sign it out
+  // now with a clear reason than have it mysteriously fail to reconnect
+  // later.
+  const kioskPasswordMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)\/password$/);
+  if (kioskPasswordMatch && req.method === 'POST') {
+    const id = decodeURIComponent(kioskPasswordMatch[1]);
+    const kiosk = KIOSKS.find((k) => k.id === id);
+    if (!kiosk) { sendJson(res, 404, { error: 'no kiosk with that id' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const password = String(body.password || '').trim().slice(0, 60);
+    if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
+    if (KIOSKS.some((k) => k.id !== id && k.password === password)) {
+      sendJson(res, 409, { error: 'that password is already in use by another kiosk' });
+      return;
+    }
+    kiosk.password = password;
+    const persisted = await saveKiosks();
+    const activeConn = kioskSessions.get(id);
+    if (activeConn) {
+      activeConn.send({ type: 'kiosk-forced-logout', reason: 'admin' });
+      activeConn.close();
+      kioskSessions.delete(id);
+    }
+    sendJson(res, 200, {
+      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
+      persisted,
+      persistenceConfigured: store.configured,
+    });
+    return;
+  }
+
   const kioskForceLogoutMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)\/force-logout$/);
   if (kioskForceLogoutMatch && req.method === 'POST') {
     const id = decodeURIComponent(kioskForceLogoutMatch[1]);
@@ -1884,19 +1945,43 @@ async function handleAdminApi(req, res, urlObj) {
   }
 
   if (urlObj.pathname === '/api/admin/config' && req.method === 'GET') {
-    sendJson(res, 200, { config: CONFIG, min: MIN_HOLD_SECONDS, max: MAX_HOLD_SECONDS });
+    sendJson(res, 200, {
+      config: CONFIG,
+      min: MIN_HOLD_SECONDS,
+      max: MAX_HOLD_SECONDS,
+      minLogoSizePx: MIN_LOGO_SIZE_PX,
+      maxLogoSizePx: MAX_LOGO_SIZE_PX,
+    });
     return;
   }
 
+  // Each field below is independently optional — the hold-duration form and
+  // the logo-size form (see admin.js) each save just their own field, so
+  // neither has to resend a value it isn't editing.
   if (urlObj.pathname === '/api/admin/config' && req.method === 'POST') {
     let body;
     try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
-    const maxHoldSeconds = Math.round(Number(body.maxHoldSeconds));
-    if (!Number.isFinite(maxHoldSeconds) || maxHoldSeconds < MIN_HOLD_SECONDS || maxHoldSeconds > MAX_HOLD_SECONDS) {
-      sendJson(res, 400, { error: `maxHoldSeconds must be a number between ${MIN_HOLD_SECONDS} and ${MAX_HOLD_SECONDS}` });
-      return;
+    const next = { ...CONFIG };
+
+    if (body.maxHoldSeconds !== undefined) {
+      const maxHoldSeconds = Math.round(Number(body.maxHoldSeconds));
+      if (!Number.isFinite(maxHoldSeconds) || maxHoldSeconds < MIN_HOLD_SECONDS || maxHoldSeconds > MAX_HOLD_SECONDS) {
+        sendJson(res, 400, { error: `maxHoldSeconds must be a number between ${MIN_HOLD_SECONDS} and ${MAX_HOLD_SECONDS}` });
+        return;
+      }
+      next.maxHoldSeconds = maxHoldSeconds;
     }
-    CONFIG = { ...CONFIG, maxHoldSeconds };
+
+    if (body.logoSizePx !== undefined) {
+      const logoSizePx = Math.round(Number(body.logoSizePx));
+      if (!Number.isFinite(logoSizePx) || logoSizePx < MIN_LOGO_SIZE_PX || logoSizePx > MAX_LOGO_SIZE_PX) {
+        sendJson(res, 400, { error: `logoSizePx must be a number between ${MIN_LOGO_SIZE_PX} and ${MAX_LOGO_SIZE_PX}` });
+        return;
+      }
+      next.logoSizePx = logoSizePx;
+    }
+
+    CONFIG = next;
     const persisted = await saveConfig();
     sendJson(res, 200, { config: CONFIG, persisted, persistenceConfigured: store.configured });
     return;
@@ -2141,15 +2226,34 @@ function handleGuestConnection(conn) {
         return;
       }
       const existing = kioskSessions.get(match.id);
-      if (existing && existing !== conn) {
+      // A page refresh tears down the old WebSocket and opens a brand-new
+      // one, which immediately replays the stored password (see kiosk.js's
+      // isReconnect auto-relogin). That new connection's login can easily
+      // reach the server before the old socket's close has been detected
+      // (TCP teardown isn't instant, and the keepalive/heartbeat interval
+      // that catches a silently-dead socket runs on its own timer) — so
+      // "existing session still registered" doesn't necessarily mean a
+      // second, different device. sessionToken disambiguates: it's a value
+      // only ever handed back to a connection that already authenticated
+      // for this exact kiosk account, so a match here proves this is the
+      // *same* login reconnecting, not a rival device guessing the
+      // password, and it's safe to just take over the slot. No token (or a
+      // mismatched one) means a genuinely separate login attempt, which
+      // still gets the usual rejection while a session is active.
+      const isSameSessionReconnect = !!(existing && msg.sessionToken && existing.kioskSessionToken === String(msg.sessionToken));
+      if (existing && existing !== conn && !isSameSessionReconnect) {
         conn.send({ type: 'kiosk-login-fail', reason: 'already-active' });
         return;
       }
       kioskAccountId = match.id;
       kioskName = match.name;
       conn.kioskAccountId = kioskAccountId; // readable from outside this closure, same convention as conn.agentId
+      // Keep the same token across a reconnect (rather than minting a new
+      // one) so a second, later refresh still recognizes this as the same
+      // session too, not just the first one.
+      conn.kioskSessionToken = isSameSessionReconnect ? existing.kioskSessionToken : crypto.randomUUID();
       kioskSessions.set(kioskAccountId, conn);
-      conn.send({ type: 'kiosk-login-ok', name: kioskName, branding: match.branding || {} });
+      conn.send({ type: 'kiosk-login-ok', name: kioskName, branding: match.branding || {}, sessionToken: conn.kioskSessionToken });
       return;
     }
 

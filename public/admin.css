@@ -163,7 +163,8 @@ html, body {
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 14px;
 }
-.agent-row-top { display: flex; align-items: center; justify-content: space-between; }
+.agent-row-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.agent-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .agent-row .agent-name { font-weight: 600; }
 .agent-row .agent-secret { color: var(--sub); font-size: 13px; margin-left: 10px; }
 .agent-row .agent-remove-btn {

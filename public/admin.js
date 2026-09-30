@@ -154,6 +154,7 @@ function startDashboard() {
   showAdminPage('page-overview'); // also triggers the first loadOverview()
   refreshAll();
   loadHoldConfig();
+  loadLogoSizeConfig();
   clearInterval(refreshHandle);
   refreshHandle = setInterval(refreshAll, REFRESH_INTERVAL_MS);
 }
@@ -211,7 +212,10 @@ function renderAgents(agents) {
     row.innerHTML = `
       <div class="agent-row-top">
         <div><span class="agent-name">${escapeHtml(a.name)}</span><span class="agent-secret">Password ${escapeHtml(a.password)}</span></div>
-        <button class="agent-remove-btn" data-id="${escapeHtml(a.id)}">Remove</button>
+        <div class="agent-row-actions">
+          <button type="button" class="btn-small btn-change-password">Change password</button>
+          <button class="agent-remove-btn" data-id="${escapeHtml(a.id)}">Remove</button>
+        </div>
       </div>
       <div class="agent-row-langs">${chipsHtml}</div>
     `;
@@ -224,6 +228,9 @@ function renderAgents(agents) {
       } catch (err) {
         alert('Could not remove agent: ' + err.message);
       }
+    });
+    row.querySelector('.btn-change-password').addEventListener('click', () => {
+      openChangeUserPassword('agent', a);
     });
     // Each chip toggles that language for this agent and saves immediately
     // — no separate "edit" mode or save button, same immediacy as the rest
@@ -275,7 +282,10 @@ function renderKiosks(kiosks) {
     row.innerHTML = `
       <div class="agent-row-top">
         <div><span class="agent-name">${escapeHtml(k.name)}</span><span class="agent-secret">Password ${escapeHtml(k.password)}</span></div>
-        <button class="agent-remove-btn" data-id="${escapeHtml(k.id)}">Remove</button>
+        <div class="agent-row-actions">
+          <button type="button" class="btn-small btn-change-password">Change password</button>
+          <button class="agent-remove-btn" data-id="${escapeHtml(k.id)}">Remove</button>
+        </div>
       </div>
       <div class="agent-row-langs">
         ${statusHtml}
@@ -293,6 +303,9 @@ function renderKiosks(kiosks) {
       } catch (err) {
         alert('Could not remove kiosk account: ' + err.message);
       }
+    });
+    row.querySelector('.btn-change-password').addEventListener('click', () => {
+      openChangeUserPassword('kiosk', k);
     });
     row.querySelector('.btn-force-logout').addEventListener('click', async () => {
       if (!confirm(`Force sign out "${k.name}" from its current device?`)) return;
@@ -932,6 +945,48 @@ function formatDuration(totalSeconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// ---- Kiosk appearance (logo size) ----
+// Shares the /api/admin/config GET/POST endpoints with the hold-duration
+// form above — each form only sends the one field it owns, so saving one
+// never touches the other (see server.js's POST /api/admin/config).
+
+async function loadLogoSizeConfig() {
+  try {
+    const data = await api('/api/admin/config');
+    const input = document.getElementById('logo-size-input');
+    input.value = data.config.logoSizePx;
+    input.min = data.minLogoSizePx;
+    input.max = data.maxLogoSizePx;
+    updateLogoSizePreview();
+  } catch { /* leave the field blank rather than interrupting the dashboard load */ }
+}
+
+function updateLogoSizePreview() {
+  const val = Number(document.getElementById('logo-size-input').value);
+  const preview = document.getElementById('logo-size-preview');
+  preview.textContent = Number.isFinite(val) && val > 0 ? `= ${val}px × ${val}px` : '';
+}
+document.getElementById('logo-size-input').addEventListener('input', updateLogoSizePreview);
+
+document.getElementById('logo-size-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('logo-size-error');
+  const okEl = document.getElementById('logo-size-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const logoSizePx = Number(document.getElementById('logo-size-input').value);
+  try {
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ logoSizePx }) });
+    warnIfNotPersisted(result);
+    okEl.textContent = 'Saved. Kiosks pick this up the next time they load or sign in.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 2500);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
 // ---- Languages (world-language catalog: which are enabled for tagging) ----
 // The full ~180-language ISO catalog, each flagged enabled/disabled — kept
 // separate from `availableLanguages` above (which is already scoped to just
@@ -1225,6 +1280,56 @@ document.getElementById('change-password-form').addEventListener('submit', async
     okEl.textContent = 'Password updated.';
     okEl.classList.remove('hidden');
     setTimeout(() => document.getElementById('change-password-modal').classList.add('hidden'), 1000);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
+// ---- Change agent/kiosk password ----
+// One shared modal for both — unlike the admin's own password (the
+// change-password-modal above), no current-password confirmation is
+// needed here: the admin is resetting someone else's credential, not
+// proving they know the old one.
+let changePasswordTarget = null; // { kind: 'agent' | 'kiosk', id, name }
+
+function openChangeUserPassword(kind, item) {
+  changePasswordTarget = { kind, id: item.id, name: item.name };
+  document.getElementById('cup-name').textContent = item.name;
+  document.getElementById('cup-kind').textContent = kind === 'agent' ? 'agent' : 'kiosk';
+  document.getElementById('cup-new').value = '';
+  document.getElementById('cup-error').classList.add('hidden');
+  document.getElementById('cup-success').classList.add('hidden');
+  document.getElementById('change-user-password-modal').classList.remove('hidden');
+}
+
+document.getElementById('btn-cancel-user-password').addEventListener('click', () => {
+  document.getElementById('change-user-password-modal').classList.add('hidden');
+});
+
+document.getElementById('change-user-password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('cup-error');
+  const okEl = document.getElementById('cup-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const password = document.getElementById('cup-new').value.trim();
+  if (!password || password.length < 4) {
+    errEl.textContent = 'Password must be at least 4 characters.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const { kind, id } = changePasswordTarget;
+  const endpoint = kind === 'agent' ? `/api/admin/agents/${encodeURIComponent(id)}/password` : `/api/admin/kiosks/${encodeURIComponent(id)}/password`;
+  try {
+    const result = await api(endpoint, { method: 'POST', body: JSON.stringify({ password }) });
+    warnIfNotPersisted(result);
+    okEl.textContent = kind === 'kiosk'
+      ? 'Password updated. Any device signed in on this kiosk was signed out.'
+      : 'Password updated.';
+    okEl.classList.remove('hidden');
+    refreshAll();
+    setTimeout(() => document.getElementById('change-user-password-modal').classList.add('hidden'), 1200);
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove('hidden');

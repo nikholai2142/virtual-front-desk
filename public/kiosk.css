@@ -56,7 +56,11 @@ html, body {
 }
 .screen.active { display: flex; }
 
-.brand-mark { width: 72px; height: 72px; margin-bottom: 8px; object-fit: contain; }
+/* --logo-size is set from JS (kiosk.js, from the admin-configurable
+   Configuration > Kiosk appearance setting) with a 72px fallback so the
+   logo still renders at a sane size before that fetch resolves, or if it
+   fails. */
+.brand-mark { width: var(--logo-size, 72px); height: var(--logo-size, 72px); margin-bottom: 8px; object-fit: contain; }
 h1 { font-size: 44px; margin: 0 0 8px; }
 h2 { font-size: 30px; margin: 16px 0 4px; }
 .sub { color: var(--sub); font-size: 18px; margin: 0 0 24px; }
