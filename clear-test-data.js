@@ -78,12 +78,16 @@ async function main() {
     }
   }
 
-  // ---- R2: recordings -------------------------------------------------------
+  // ---- R2: recordings --------------------------------------------------
+  // Scoped to the recordings/ prefix only — R2 (when configured) also
+  // holds kiosk-group branding images under branding/, and those are real
+  // setup (like agents.json), not test data, so this deliberately never
+  // touches them.
   if (!r2.configured) {
     console.log('Cloudflare R2: not configured — recordings (if any) are on local disk, handled below.');
   } else {
     try {
-      const keys = await r2.listObjectKeys();
+      const keys = await r2.listObjectKeys('recordings/');
       if (DRY_RUN) {
         console.log(`Cloudflare R2: ${keys.length} recording object(s) would be deleted.`);
       } else {

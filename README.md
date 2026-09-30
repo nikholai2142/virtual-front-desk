@@ -344,8 +344,10 @@ The **Storage** panel on the admin dashboard's Configuration page (see
 right now:
 
 - **With R2 configured**, it lists the bucket (via the same S3-compatible
-  API used to upload/play recordings) and sums up the actual bytes stored,
-  shown as a meter against R2's **10GB/month free tier** — green while
+  API used to upload/play recordings) and sums up the actual bytes stored
+  — recordings plus any kiosk-group branding images, since both now share
+  the same bucket — shown as a meter against R2's **10GB/month free
+  tier** — green while
   there's plenty of headroom, amber past 60%, red past 90%. That free-tier
   line is just a helpful reference, though, **not a hard cap**: R2 is
   billed usage like any S3-compatible storage, not a fixed-size disk, so
@@ -1034,7 +1036,9 @@ in a real lobby:
   recordings stay on local disk, which most Render plans wipe on every
   redeploy/restart. There's also no transcript or PMS integration — just
   the video/audio file itself plus topic/agent/duration/notes in the call
-  log.
+  log. **Kiosk-group branding images (logos/backgrounds) share the same
+  R2 setup and the same caveat** — see "Customizing the kiosk's branding"
+  → "Kiosk groups" above.
 - **No multi-device ringing / overflow routing.** Any signed-in agent can
   answer any waiting call; there's no skill-based routing, no
   "ring all agents then escalate," and no SMS/callback fallback if no
@@ -1199,14 +1203,41 @@ Create a group, then:
    back to "No group") takes effect immediately, live, if that kiosk is
    currently signed in — no sign-out needed.
 
-Uploaded images are stored under
-`public/branding/groups/<group-id>/` and served by the same static file
-server as the rest of `public/` — no separate object storage needed for
-this (unlike call recordings, which can optionally go to R2). Removing a
-kiosk group also deletes its uploaded branding files; any kiosk that was
-assigned to it falls back to the site-wide default look (live, if it's
-currently signed in) rather than being left pointing at a group that no
-longer exists.
+**Storage — same local-disk-by-default / R2-for-real-persistence pattern
+as call recordings.** Without any setup, uploaded logos/backgrounds are
+stored **on local disk** under `public/branding/groups/<group-id>/` and
+served by the same static file server as the rest of `public/`. That's
+simple, but it comes with the same caveat as everything else this app
+keeps on local disk: **on most Render plans, local disk is wiped on every
+redeploy and restart** — so a branding image that looked fine yesterday
+can come back missing/broken after the next deploy or restart, or after
+re-uploading the project from a fresh copy of the zip (there's no
+`public/branding/groups/` in the zip at all until you upload something).
+
+If you've already set up **Cloudflare R2** for call recordings (see "Call
+recordings" above), branding images automatically use it too — same four
+env vars (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`R2_BUCKET`), no extra setup. Each upload is saved to R2 under
+`branding/groups/<group-id>/`; if the R2 upload fails for any reason (bad
+credentials, a network blip), it falls back to local disk instead of
+losing the upload, exactly like recordings do. The URL a kiosk/admin
+dashboard loads a branding image from doesn't change either way — if the
+file isn't found on local disk and R2 is configured, the server
+transparently redirects to a freshly-minted R2 link, so nothing else needs
+to know which backend actually has it. The admin dashboard's branding
+editor shows a warning when R2 isn't configured, so you know before
+uploading that the image won't survive a restart.
+
+**Already have broken images from before this fix, or from running
+without R2 configured?** They won't retroactively move to R2 on their
+own — just re-upload the logo/background from **User Management → Kiosk
+groups → Branding…** once R2 is set up, and it'll be saved there going
+forward.
+
+Removing a kiosk group also deletes its uploaded branding files (from
+whichever backend they're on); any kiosk that was assigned to it falls
+back to the site-wide default look (live, if it's currently signed in)
+rather than being left pointing at a group that no longer exists.
 
 Branding applies the moment a kiosk device signs in, and updates live
 (no sign-out needed) if you change the group's branding, or reassign the

@@ -165,13 +165,21 @@ function brandingForKiosk(kiosk) {
   return (group && group.branding) || {};
 }
 
-// Uploaded branding images are stored on local disk under public/, so the
-// existing static file server (serveStatic, below) serves them with no
-// extra routing needed — the same way the global public/branding/ assets
-// already are.
+// Uploaded branding images: local disk under public/ when R2 isn't
+// configured (served by the existing static file server, serveStatic,
+// below, with no extra routing needed — the same way the global
+// public/branding/ assets already are), or R2 when it is (same reasoning
+// as recordings — see r2.js and the README's "Call recordings" section:
+// local disk doesn't survive a redeploy/restart on most hosts). Either way
+// the served URL keeps the same /branding/groups/<id>/<file> shape;
+// serveStatic tries local disk first and falls back to a redirect to R2 if
+// R2 is configured and the file isn't sitting on local disk right now, so
+// nothing else (the kiosk client, the admin dashboard) needs to know which
+// backend actually holds a given image.
 const KIOSK_GROUP_BRANDING_DIR = path.join(PUBLIC_DIR, 'branding', 'groups');
 const MAX_BRANDING_UPLOAD_BYTES = 8 * 1024 * 1024; // JSON body cap — covers base64 overhead on a ~5MB image
 const MAX_BRANDING_IMAGE_BYTES = 5 * 1024 * 1024; // decoded image size cap, per file
+const BRANDING_URL_TTL_SECONDS = 300; // short-lived — reminted on every serveStatic fallback, never stored
 const BRANDING_IMAGE_EXT_BY_MIME = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
@@ -190,7 +198,58 @@ function decodeBrandingImage(dataUrl, { allowSvg }) {
   }
   const buf = Buffer.from(match[2], 'base64');
   if (buf.length > MAX_BRANDING_IMAGE_BYTES) throw new Error('Image is too large (max 5MB).');
-  return { buf, ext };
+  return { buf, ext, mime };
+}
+
+// Every extension a branding image could have been saved under (across
+// re-uploads that change format, e.g. png -> jpg) — used to sweep away
+// leftovers on re-upload/removal/group-deletion so an old file never keeps
+// being served alongside — or instead of — a newer one.
+const BRANDING_IMAGE_EXTS = ['.png', '.jpg', '.webp', '.svg'];
+
+/** Best-effort delete of every possible `<baseName>.*` R2 object for a
+ *  kiosk group — a no-op when R2 isn't configured. Mirrors
+ *  clearBrandingFile's local-disk sweep, just against R2 instead (R2 has
+ *  no directory listing needed here since the extension set is small and
+ *  fixed, and deleteObject() already swallows a 404 for one that was never
+ *  uploaded). */
+async function clearBrandingObjectsR2(groupId, baseName) {
+  if (!r2.configured) return;
+  await Promise.all(
+    BRANDING_IMAGE_EXTS.map((ext) => r2.deleteObject(`branding/groups/${groupId}/${baseName}${ext}`))
+  );
+}
+
+/** Persists one branding image (logo or background) for a kiosk group — to
+ *  R2 when configured, local disk otherwise — and returns the URL to store
+ *  on branding.<baseName>Url. Sweeps both backends first: a group could
+ *  have a leftover on local disk from before R2 was configured (or vice
+ *  versa) or under a different extension from a previous upload, and
+ *  either would otherwise keep being served alongside — or instead of —
+ *  this new one. */
+async function saveBrandingImage(id, groupDir, baseName, buf, ext, mime) {
+  clearBrandingFile(groupDir, baseName);
+  await clearBrandingObjectsR2(id, baseName);
+  if (r2.configured) {
+    try {
+      await r2.putObject(`branding/groups/${id}/${baseName}${ext}`, buf, mime);
+      return `/branding/groups/${id}/${baseName}${ext}?v=${Date.now()}`;
+    } catch (err) {
+      // Same resilience as recordings' R2 upload (see finalizeRecording):
+      // don't fail the admin's upload over a transient R2 hiccup — save it
+      // to local disk instead and say so, rather than losing it outright.
+      console.error(`[branding] R2 upload failed for group ${id}'s ${baseName}, saving to local disk instead (won't survive a restart — see README):`, err.message);
+    }
+  }
+  fs.mkdirSync(groupDir, { recursive: true });
+  fs.writeFileSync(path.join(groupDir, `${baseName}${ext}`), buf);
+  return `/branding/groups/${id}/${baseName}${ext}?v=${Date.now()}`;
+}
+
+/** Removes one branding image override from whichever backend(s) might hold it. */
+async function removeBrandingImage(groupDir, id, baseName) {
+  clearBrandingFile(groupDir, baseName);
+  await clearBrandingObjectsR2(id, baseName);
 }
 
 /** Deletes any existing `<baseName>.*` file in `dir` — run before writing a
@@ -632,6 +691,26 @@ function serveStatic(req, res) {
   }
   fs.readFile(filePath, (err, data) => {
     if (err) {
+      // Uploaded kiosk-group branding images (logo/background) are stored
+      // on R2 instead of local disk when R2 is configured — see
+      // saveBrandingImage — because local disk doesn't survive a
+      // redeploy/restart on most hosts. So a branding path missing here
+      // doesn't necessarily mean it doesn't exist at all: mint a
+      // short-lived redirect to R2 before giving up with a 404. (The
+      // site-wide default assets under public/branding/ — logo.svg,
+      // background.jpg — are checked-in files, never uploads, so this only
+      // ever applies to the /branding/groups/ subpath.)
+      if (r2.configured && reqPath.startsWith('/branding/groups/')) {
+        try {
+          const redirectUrl = r2.getPresignedUrl(reqPath.slice(1), BRANDING_URL_TTL_SECONDS);
+          res.writeHead(302, { Location: redirectUrl });
+          res.end();
+          return;
+        } catch (redirectErr) {
+          console.error('[branding] could not mint an R2 URL for', reqPath, '—', redirectErr.message);
+          // fall through to the plain 404 below
+        }
+      }
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
       return;
     }
@@ -1151,6 +1230,14 @@ function entryMatchesAgentFilter(e, filterValue) {
     return (e.agentName || 'Unknown') === name;
   }
   return e.agentId === filterValue;
+}
+
+/** The human-readable explanation of whether uploaded kiosk-group branding images (logo/background) will survive a restart or redeploy, shown in the admin dashboard's branding editor. Independent of persistenceNote()/store.configured above — that's about the kiosk-groups *record* (Redis vs. kiosk-groups.json), this is about the image *files* themselves (R2 vs. local disk under public/branding/groups/). */
+function brandingPersistenceNote() {
+  if (r2.configured) {
+    return 'Custom logos and backgrounds are stored in R2 — this survives restarts and redeploys.';
+  }
+  return "R2 isn't set up, so custom logos and backgrounds are only saved to this server's local disk and will be lost on the next restart or redeploy. See the README's \"Call recordings\" section to set up R2 (the same setup covers branding images too).";
 }
 
 /** The human-readable explanation of what the stats do/don't cover, shown under both the Dashboard and Agent Performance pages. */
@@ -1929,7 +2016,7 @@ async function handleAdminApi(req, res, urlObj) {
   // overriding the global kiosk.css defaults for every kiosk assigned to
   // this group. Same shape as the agents/kiosks endpoints above.
   if (urlObj.pathname === '/api/admin/kiosk-groups' && req.method === 'GET') {
-    sendJson(res, 200, { groups: KIOSK_GROUPS });
+    sendJson(res, 200, { groups: KIOSK_GROUPS, brandingImagesPersist: r2.configured, brandingPersistenceNote: brandingPersistenceNote() });
     return;
   }
 
@@ -1984,25 +2071,19 @@ async function handleAdminApi(req, res, urlObj) {
 
     try {
       if (body.removeLogo) {
-        clearBrandingFile(groupDir, 'logo');
+        await removeBrandingImage(groupDir, id, 'logo');
         delete branding.logoUrl;
       } else if (body.logo && body.logo.dataUrl) {
-        const { buf, ext } = decodeBrandingImage(body.logo.dataUrl, { allowSvg: true });
-        fs.mkdirSync(groupDir, { recursive: true });
-        clearBrandingFile(groupDir, 'logo');
-        fs.writeFileSync(path.join(groupDir, `logo${ext}`), buf);
-        branding.logoUrl = `/branding/groups/${id}/logo${ext}?v=${Date.now()}`;
+        const { buf, ext, mime } = decodeBrandingImage(body.logo.dataUrl, { allowSvg: true });
+        branding.logoUrl = await saveBrandingImage(id, groupDir, 'logo', buf, ext, mime);
       }
 
       if (body.removeBackground) {
-        clearBrandingFile(groupDir, 'background');
+        await removeBrandingImage(groupDir, id, 'background');
         delete branding.backgroundUrl;
       } else if (body.background && body.background.dataUrl) {
-        const { buf, ext } = decodeBrandingImage(body.background.dataUrl, { allowSvg: false });
-        fs.mkdirSync(groupDir, { recursive: true });
-        clearBrandingFile(groupDir, 'background');
-        fs.writeFileSync(path.join(groupDir, `background${ext}`), buf);
-        branding.backgroundUrl = `/branding/groups/${id}/background${ext}?v=${Date.now()}`;
+        const { buf, ext, mime } = decodeBrandingImage(body.background.dataUrl, { allowSvg: false });
+        branding.backgroundUrl = await saveBrandingImage(id, groupDir, 'background', buf, ext, mime);
       }
 
       if (body.accentColor !== undefined) {
@@ -2031,7 +2112,7 @@ async function handleAdminApi(req, res, urlObj) {
       const activeConn = kioskSessions.get(kiosk.id);
       if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: group.branding });
     }
-    sendJson(res, 200, { groups: KIOSK_GROUPS, persisted, persistenceConfigured: store.configured });
+    sendJson(res, 200, { groups: KIOSK_GROUPS, persisted, persistenceConfigured: store.configured, brandingImagesPersist: r2.configured, brandingPersistenceNote: brandingPersistenceNote() });
     return;
   }
 
@@ -2053,6 +2134,7 @@ async function handleAdminApi(req, res, urlObj) {
       if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: {} });
     }
     try { fs.rmSync(path.join(KIOSK_GROUP_BRANDING_DIR, id), { recursive: true, force: true }); } catch { /* non-fatal */ }
+    await Promise.all([clearBrandingObjectsR2(id, 'logo'), clearBrandingObjectsR2(id, 'background')]);
     const [groupsPersisted, kiosksPersisted] = await Promise.all([
       saveKioskGroups(),
       unassignedCount ? saveKiosks() : Promise.resolve(true),
@@ -3030,9 +3112,9 @@ async function main() {
   }
 
   if (r2.configured) {
-    console.log('[recordings] Cloudflare R2 configured — call recordings will be uploaded there and persist across restarts/redeploys.');
+    console.log('[recordings] Cloudflare R2 configured — call recordings and kiosk-group branding images (logos/backgrounds) will be uploaded there and persist across restarts/redeploys.');
   } else {
-    console.log('[recordings] R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET not set — recordings stay on local disk only, which most Render plans wipe on redeploy/restart (see README\'s "Call recordings" section).');
+    console.log('[recordings] R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET not set — recordings and kiosk-group branding images stay on local disk only, which most Render plans wipe on redeploy/restart (see README\'s "Call recordings" section).');
   }
 
   if (chat.whatsappConfigured || chat.messengerConfigured) {

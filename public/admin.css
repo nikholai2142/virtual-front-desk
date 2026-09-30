@@ -224,6 +224,7 @@ html, body {
 .lang-catalog-empty { color: var(--sub); font-size: 13px; grid-column: 1 / -1; }
 
 .stats-note { color: var(--sub); font-size: 12px; margin: 0 0 4px; }
+.stats-note-warning { color: #8a5a09; background: #fdf3e0; border: 1px solid #f0d69b; border-radius: 8px; padding: 8px 12px; font-size: 12px; margin: 0 0 4px; }
 .stats-hint { color: var(--sub); font-size: 12px; margin: 0 0 14px; opacity: 0.8; }
 .stats-table { display: flex; flex-direction: column; gap: 12px; }
 .missed-calls-list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }

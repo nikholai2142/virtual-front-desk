@@ -238,19 +238,24 @@ async function getStorageSummary() {
 }
 
 /**
- * Lists every object key currently in the bucket (paginating the same way
- * getStorageSummary does). Used by the go-live cleanup script to enumerate
- * recordings to delete — everyday server.js code never needs the full key
- * list, only getStorageSummary's totals, so this stays a separate export
- * rather than folding into that function's return value.
+ * Lists every object key currently in the bucket, optionally restricted to
+ * keys starting with `prefix` (paginating the same way getStorageSummary
+ * does). Used by the go-live cleanup script to enumerate *recordings* to
+ * delete — it passes prefix: 'recordings/' so it never touches
+ * `branding/...` objects, which (like agents.json) are real setup, not
+ * test data, and shouldn't be wiped by a "clear test data" run. Everyday
+ * server.js code never needs the full key list, only getStorageSummary's
+ * totals, so this stays a separate export rather than folding into that
+ * function's return value.
  */
-async function listObjectKeys() {
+async function listObjectKeys(prefix) {
   assertConfigured();
   const keys = [];
   let continuationToken = null;
 
   do {
     const queryParams = { 'list-type': '2', 'max-keys': '1000' };
+    if (prefix) queryParams.prefix = prefix;
     if (continuationToken) queryParams['continuation-token'] = continuationToken;
 
     const { amzDate, dateStamp } = amzDateParts(new Date());

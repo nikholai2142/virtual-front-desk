@@ -179,6 +179,7 @@ async function refreshAll() {
     renderAgents(agentsData.agents);
     renderTopbarStats(statsData);
     renderResetRequests(resetData.requests);
+    brandingPersistenceInfo = { persist: kioskGroupsData.brandingImagesPersist, note: kioskGroupsData.brandingPersistenceNote };
     renderKioskGroups(kioskGroupsData.groups, kiosksData.kiosks);
     renderKiosks(kiosksData.kiosks, kioskGroupsData.groups);
     currentAdminId = adminsData.meId;
@@ -1575,6 +1576,21 @@ let brandingPendingLogoDataUrl = null;
 let brandingPendingBackgroundDataUrl = null;
 let brandingRemoveLogo = false;
 let brandingRemoveBackground = false;
+// Whether uploaded logos/backgrounds will survive a restart (R2 configured)
+// — refreshed on every refreshAll() from the kiosk-groups endpoint, shown
+// in the branding editor so an admin knows before they upload.
+let brandingPersistenceInfo = { persist: true, note: '' };
+
+/** Shows the branding-persistence warning in the editor when R2 isn't configured (uploads would only live on local disk); hides it otherwise. */
+function renderBrandingPersistenceNote() {
+  const el = document.getElementById('kiosk-branding-persistence-note');
+  if (brandingPersistenceInfo.persist === false) {
+    el.textContent = brandingPersistenceInfo.note || "R2 isn't set up — custom logos and backgrounds won't survive a restart. See the README.";
+    el.className = 'stats-note-warning';
+  } else {
+    el.classList.add('hidden');
+  }
+}
 
 function openKioskBranding(group) {
   brandingGroupId = group.id;
@@ -1586,6 +1602,7 @@ function openKioskBranding(group) {
   document.getElementById('kiosk-branding-name').textContent = group.name;
   document.getElementById('kiosk-branding-error').classList.add('hidden');
   document.getElementById('kiosk-branding-success').classList.add('hidden');
+  renderBrandingPersistenceNote();
 
   const branding = group.branding || {};
   const accentHex = document.getElementById('kb-accent-hex');
