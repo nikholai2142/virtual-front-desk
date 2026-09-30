@@ -566,9 +566,12 @@ see how agents are actually doing, straight from the people they helped.
 
 ## Admin dashboard
 
-Open `/admin` and sign in with the admin password (default `letmein`,
-stored in `admin.json` — **change it before real use**, the same way you'd
-change the demo agent passwords).
+Open `/admin` and sign in with the admin password (default `letmein` on a
+brand-new install, stored in `admins.json` — **change it before real
+use**, the same way you'd change the demo agent passwords). There's just
+one login field: any admin account's password gets you in, and every
+admin account has identical full access — see "Admin accounts" under User
+Management below for adding more.
 
 The dashboard is organized into four pages, switched from the nav bar under
 the header — **Dashboard** is what you land on right after signing in.
@@ -578,10 +581,12 @@ the header — **Dashboard** is what you land on right after signing in.
   click **Sign out** or close the tab. Refreshing the page — or the
   browser reconnecting after a Render free-tier cold start — no longer
   drops you back to the sign-in screen.
-- **Change the admin password** — click the ⚙ button next to "Refresh" in
-  the header (this stays available on every page), enter the current
-  password and a new one. Takes effect immediately (your own session keeps
-  working without needing to sign in again).
+- **Change my password** — click the ⚙ button next to "Refresh" in the
+  header (this stays available on every page), enter your current
+  password and a new one. Only changes your own admin account's password;
+  takes effect immediately (your own session keeps working without
+  needing to sign in again). To reset a *different* admin's password
+  directly, see "Admin accounts" under User Management below.
 - A small **online / waiting / on-a-call** summary in the header always
   reflects what's happening *right now*, independent of whatever the
   Dashboard page's filters are set to.
@@ -650,6 +655,20 @@ in the selected range shows a row with **0 calls** rather than disappearing.
 Agent accounts and password resets, previously mixed in with everything
 else:
 
+- **Admin accounts** — a panel at the top for managing who can sign in to
+  this dashboard:
+  - **Add an admin** — enter a name and a password (at least 4
+    characters); usable to sign in at `/admin` right away. Every admin
+    account has identical full access — there are no separate roles or
+    permission levels.
+  - **Change an admin's password** — click "Change password" on their row
+    and set a new one directly, same as for agents/kiosks. If you do this
+    on your own account rather than using the ⚙ "Change my password" in
+    the header, this session stays signed in under the new password
+    automatically.
+  - **Remove an admin** — click "Remove" on their row (asks for
+    confirmation first). Disabled on your own row and on the last
+    remaining admin account — there's always at least one way in.
 - **Add an agent** — enter a name, a password (at least 4 characters,
   letters/numbers/symbols all fine), and tick which language(s) they take
   calls in; it's added to the agent list immediately (agents can sign in
@@ -756,11 +775,12 @@ both the Dashboard and Agent Performance pages always tells you which mode
 you're in.
 
 The admin API itself (`/api/admin/agents`, `/api/admin/stats`) is
-protected by a single shared password sent as an `X-Admin-Password`
-header — there's no per-admin login or audit trail, matching the same
-demo-grade auth used for agent passwords. Treat it the same way: fine for a
-small team getting started, swap for real auth (SSO, a proper user table)
-before this is relied on operationally.
+protected by a password sent as an `X-Admin-Password` header, checked
+against any admin account (see "Admin accounts" above) — there's no
+session/cookie and no audit trail, matching the same demo-grade auth used
+for agent passwords. Treat it the same way: fine for a small team getting
+started, swap for real auth (SSO, a proper user table) before this is
+relied on operationally.
 
 ## Persistent storage (agents + call history)
 
@@ -771,10 +791,10 @@ below). That's fine for trying things out, but not for actually relying on
 it: a restart, a spin-down (free Render instances sleep after inactivity),
 or your next deploy wipes it clean.
 
-To make agents, the admin password, call history (answered and
-not-answered), guest ratings, and app config (the video call configuration
-under "Call hold" above) **permanent — surviving restarts and redeploys,
-with true all-time history** — connect a free
+To make agents, admin accounts, kiosk accounts and groups, call history
+(answered and not-answered), guest ratings, and app config (the video call
+configuration under "Call hold" above) **permanent — surviving restarts
+and redeploys, with true all-time history** — connect a free
 [Upstash](https://upstash.com) Redis database. It's a small cloud
 database reached over plain HTTPS, so no extra npm packages are needed, and
 it has a generous free tier that easily covers a single hotel's traffic.
@@ -976,15 +996,16 @@ in a real lobby:
   `CLOUDFLARE_TURN_API_TOKEN` configured, calls fall back to STUN-only and
   any guest on a network that blocks direct peer-to-peer connections
   (common on hotel guest wifi) will get a silent hang instead of a call.
-- **Replace the agent login and the admin password.** `agents.json` and
-  `admin.json` are flat files for the demo, and everyone (agents, the
-  admin) can now change their own password from the dashboard, plus
-  request a reset if they forget it — but it's still one shared password
-  per role with no per-person accounts or audit trail. Swap
-  `handleAgentConnection`'s password check and the admin API's password
-  check in `server.js` for real auth (SSO, your PMS's staff directory,
-  per-shift codes, etc.) before this is used with real guests or handed to
-  real managers.
+- **Replace the agent login and the admin login.** `agents.json` and
+  `admins.json` are flat files for the demo. Agents and admins are both
+  named accounts now (an admin can add more admins, an agent's password
+  can be reset by an admin, and everyone can change their own password
+  from the dashboard, plus request a reset if they forget it) — but
+  there's still no hashing, no audit trail, and every admin account has
+  identical full access with no roles. Swap `handleAgentConnection`'s
+  password check and the admin API's password check in `server.js` for
+  real auth (SSO, your PMS's staff directory, per-shift codes, etc.)
+  before this is used with real guests or handed to real managers.
 - **The live queue and active calls are in-memory, always.** Who's
   waiting and who's on a call right now lives in the Node process's
   memory regardless of the Redis setup above, so it can't run as multiple
@@ -1068,8 +1089,9 @@ virtual-front-desk/
 ├── turn.js         Cloudflare TURN: mints short-lived WebRTC relay credentials per call
 ├── r2.js           Cloudflare R2: signs S3-compatible requests to upload/serve/list call recordings
 ├── agents.json     Seed/fallback agent passwords/names — real source of truth is Redis once configured
-├── kiosks.json     Seed/fallback kiosk account passwords/names — real source of truth is Redis once configured
-├── admin.json      Admin dashboard password (default "letmein" — change this)
+├── kiosks.json     Seed/fallback kiosk account passwords/names/group assignments — real source of truth is Redis once configured
+├── kiosk-groups.json  Seed/fallback kiosk group names/branding — real source of truth is Redis once configured
+├── admins.json     Seed/fallback admin account names/passwords (default password "letmein" — change this) — real source of truth is Redis once configured
 ├── config.json     Seed/fallback video call configuration (currently: max hold duration)
 ├── recordings/     Call recordings (.webm) + index.json — local staging always, final home unless R2 is configured (see "Call recordings")
 ├── package.json
@@ -1096,8 +1118,9 @@ virtual-front-desk/
 - **Agents**: add/remove them from the `/admin` dashboard (no restart
   needed — it's live immediately, and permanent once Redis is set up per
   "Persistent storage" above), or edit `agents.json` by hand and redeploy.
-- **Admin password**: edit `admin.json` (`{"password": "..."}`) and
-  redeploy.
+- **Admin accounts**: add/remove them from the `/admin` dashboard's User
+  Management page (see "Admin accounts" above), or edit `admins.json` by
+  hand and redeploy.
 
 ### Customizing the kiosk's branding
 

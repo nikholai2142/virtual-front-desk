@@ -25,7 +25,7 @@
       <span class="logo">🛎️ Virtual Front Desk — Admin</span>
       <div class="topbar-right">
         <span id="totals-summary" class="totals-summary"></span>
-        <button id="btn-open-change-password" class="icon-btn" type="button" title="Change admin password">⚙</button>
+        <button id="btn-open-change-password" class="icon-btn" type="button" title="Change my password">⚙</button>
         <button id="btn-refresh" class="btn-small">Refresh</button>
         <button id="btn-sign-out" class="btn-small">Sign out</button>
       </div>
@@ -154,6 +154,22 @@
 
       <!-- USER MANAGEMENT -->
       <div id="page-users" class="admin-page">
+        <section class="panel panel-full">
+          <h2>Admin accounts</h2>
+          <p class="stats-hint">Everyone with an admin account has identical full access to this dashboard — there are no separate roles. You can't remove your own account or the last remaining one, so there's always at least one way in.</p>
+          <div id="admins-list" class="agents-list"></div>
+
+          <form id="add-admin-form" class="add-agent-form">
+            <h3>Add admin</h3>
+            <div class="add-agent-row">
+              <input id="new-admin-name" type="text" placeholder="Name" maxlength="60" />
+              <input id="new-admin-password" type="text" placeholder="Password" maxlength="60" />
+              <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+            <p id="add-admin-error" class="error hidden"></p>
+          </form>
+        </section>
+
         <section class="panel panel-full">
           <h2>Password reset requests <span id="reset-requests-badge" class="count-badge hidden">0</span></h2>
           <div id="reset-requests-list" class="agents-list">
@@ -285,8 +301,8 @@
   <!-- CHANGE PASSWORD -->
   <div id="change-password-modal" class="modal-overlay hidden">
     <form id="change-password-form" class="modal-card">
-      <h2>Change admin password</h2>
-      <p class="sub">Update the password used to sign in to this dashboard.</p>
+      <h2>Change my password</h2>
+      <p class="sub">Update the password on your own admin account. To reset a different admin's password, use User Management → Admin accounts instead.</p>
       <div class="modal-field">
         <label for="cp-current">Current password</label>
         <input id="cp-current" type="password" autocomplete="current-password" maxlength="60" />

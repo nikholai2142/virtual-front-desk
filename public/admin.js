@@ -10,6 +10,11 @@ const STORAGE_KEY = 'vfd_admin_password';
 
 let adminPassword = null;
 let refreshHandle = null;
+// The signed-in admin account's id, from the last /api/admin/admins fetch
+// — used to mark "(you)" in the Admin accounts list and to keep this
+// session's adminPassword in sync if that account's password is reset
+// from there rather than via "Change my password" in the topbar.
+let currentAdminId = null;
 
 // The FULL supported-language list — fetched once at load (no auth needed,
 // same endpoint the kiosk and agent dashboard use). This admin page
@@ -163,18 +168,21 @@ document.getElementById('btn-refresh').addEventListener('click', refreshAll);
 
 async function refreshAll() {
   try {
-    const [agentsData, statsData, resetData, kiosksData, kioskGroupsData] = await Promise.all([
+    const [agentsData, statsData, resetData, kiosksData, kioskGroupsData, adminsData] = await Promise.all([
       api('/api/admin/agents'),
       api('/api/admin/stats'),
       api('/api/admin/password-reset-requests'),
       api('/api/admin/kiosks'),
       api('/api/admin/kiosk-groups'),
+      api('/api/admin/admins'),
     ]);
     renderAgents(agentsData.agents);
     renderTopbarStats(statsData);
     renderResetRequests(resetData.requests);
     renderKioskGroups(kioskGroupsData.groups, kiosksData.kiosks);
     renderKiosks(kiosksData.kiosks, kioskGroupsData.groups);
+    currentAdminId = adminsData.meId;
+    renderAdmins(adminsData.admins, adminsData.meId);
     // Both filtered views (Dashboard's tiles/chart and Agent Performance's
     // charts/table) only need refreshing while actually visible — no point
     // re-fetching and re-drawing something nobody's looking at every 10
@@ -397,6 +405,52 @@ function renderKioskGroups(groups, kiosks) {
       }
     });
     row.querySelector('.btn-edit-branding').addEventListener('click', () => openKioskBranding(g));
+    list.appendChild(row);
+  });
+}
+
+function renderAdmins(admins, meId) {
+  const list = document.getElementById('admins-list');
+  list.innerHTML = '';
+  admins.forEach((a) => {
+    const isMe = a.id === meId;
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    // Every admin has full access — no separate roles — so the only
+    // guardrails are the ones that stop someone locking everyone (or just
+    // themselves) out: you can't remove your own account, and the last
+    // remaining account can't be removed at all. Both are enforced
+    // server-side too; disabling here is just to explain why up front
+    // rather than round-tripping to find out.
+    const removeDisabled = isMe || admins.length <= 1;
+    const removeTitle = isMe
+      ? "You can't remove your own admin account — sign in as a different admin to remove this one."
+      : admins.length <= 1
+        ? 'Cannot remove the last admin account.'
+        : '';
+    row.innerHTML = `
+      <div class="agent-row-top">
+        <div><span class="agent-name">${escapeHtml(a.name)}${isMe ? ' <span class="lang-chip active" style="cursor:default">you</span>' : ''}</span><span class="agent-secret">Password ${escapeHtml(a.password)}</span></div>
+        <div class="agent-row-actions">
+          <button type="button" class="btn-small btn-change-password">Change password</button>
+          <button class="agent-remove-btn" data-id="${escapeHtml(a.id)}" ${removeDisabled ? 'disabled' : ''} title="${escapeHtml(removeTitle)}">Remove</button>
+        </div>
+      </div>
+    `;
+    row.querySelector('.btn-change-password').addEventListener('click', () => {
+      openChangeUserPassword('admin', a);
+    });
+    row.querySelector('.agent-remove-btn').addEventListener('click', async () => {
+      if (removeDisabled) return;
+      if (!confirm(`Remove admin account "${a.name}"?`)) return;
+      try {
+        const result = await api(`/api/admin/admins/${encodeURIComponent(a.id)}`, { method: 'DELETE' });
+        warnIfNotPersisted(result);
+        refreshAll();
+      } catch (err) {
+        alert('Could not remove this admin account: ' + err.message);
+      }
+    });
     list.appendChild(row);
   });
 }
@@ -1322,6 +1376,34 @@ document.getElementById('add-kiosk-group-form').addEventListener('submit', async
   }
 });
 
+document.getElementById('add-admin-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('add-admin-error');
+  errEl.classList.add('hidden');
+  const name = document.getElementById('new-admin-name').value.trim();
+  const password = document.getElementById('new-admin-password').value.trim();
+  if (!name || !password) {
+    errEl.textContent = 'Both name and password are required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (password.length < 4) {
+    errEl.textContent = 'Password must be at least 4 characters.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    const result = await api('/api/admin/admins', { method: 'POST', body: JSON.stringify({ name, password }) });
+    document.getElementById('new-admin-name').value = '';
+    document.getElementById('new-admin-password').value = '';
+    warnIfNotPersisted(result);
+    refreshAll();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
 // If persistent storage IS set up but this particular save didn't reach it
 // (a transient Redis/network hiccup), say so — otherwise the admin has no
 // way to know the change might not survive a restart.
@@ -1392,12 +1474,12 @@ document.getElementById('change-password-form').addEventListener('submit', async
 // change-password-modal above), no current-password confirmation is
 // needed here: the admin is resetting someone else's credential, not
 // proving they know the old one.
-let changePasswordTarget = null; // { kind: 'agent' | 'kiosk', id, name }
+let changePasswordTarget = null; // { kind: 'agent' | 'kiosk' | 'admin', id, name }
 
 function openChangeUserPassword(kind, item) {
   changePasswordTarget = { kind, id: item.id, name: item.name };
   document.getElementById('cup-name').textContent = item.name;
-  document.getElementById('cup-kind').textContent = kind === 'agent' ? 'agent' : 'kiosk';
+  document.getElementById('cup-kind').textContent = kind === 'agent' ? 'agent' : kind === 'admin' ? 'admin' : 'kiosk';
   document.getElementById('cup-new').value = '';
   document.getElementById('cup-error').classList.add('hidden');
   document.getElementById('cup-success').classList.add('hidden');
@@ -1421,10 +1503,20 @@ document.getElementById('change-user-password-form').addEventListener('submit', 
     return;
   }
   const { kind, id } = changePasswordTarget;
-  const endpoint = kind === 'agent' ? `/api/admin/agents/${encodeURIComponent(id)}/password` : `/api/admin/kiosks/${encodeURIComponent(id)}/password`;
+  const endpoint = kind === 'agent' ? `/api/admin/agents/${encodeURIComponent(id)}/password`
+    : kind === 'admin' ? `/api/admin/admins/${encodeURIComponent(id)}/password`
+    : `/api/admin/kiosks/${encodeURIComponent(id)}/password`;
   try {
     const result = await api(endpoint, { method: 'POST', body: JSON.stringify({ password }) });
     warnIfNotPersisted(result);
+    // Resetting your OWN admin account this way (rather than through
+    // "Change my password" in the topbar, which re-confirms the old one)
+    // still needs to keep this session authenticated — otherwise the very
+    // next request would 401 against the password just replaced.
+    if (kind === 'admin' && id === currentAdminId) {
+      adminPassword = password;
+      sessionStorage.setItem(STORAGE_KEY, password);
+    }
     okEl.textContent = kind === 'kiosk'
       ? 'Password updated. Any device signed in on this kiosk was signed out.'
       : 'Password updated.';

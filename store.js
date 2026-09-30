@@ -28,6 +28,7 @@ const configured = Boolean(REST_URL && REST_TOKEN);
 const AGENTS_KEY = 'vfd:agents';
 const KIOSKS_KEY = 'vfd:kiosks';
 const KIOSK_GROUPS_KEY = 'vfd:kioskgroups';
+const ADMINS_KEY = 'vfd:admins';
 const ADMIN_PASSWORD_KEY = 'vfd:admin:password';
 const CALL_LOG_KEY = 'vfd:calllog';
 // A safety net, not a real limit — this is roughly 135 years of calls at
@@ -238,6 +239,47 @@ async function persistAdminPassword(password) {
   } catch (err) {
     connected = false;
     console.error('[store] could not save the admin password to Redis — this change may be lost on the next restart/redeploy:', err.message);
+    return false;
+  }
+}
+
+// ---- Admin accounts ----------------------------------------------------
+// Named admin accounts (superseding the single admin password above,
+// which is kept only for migrating an existing deploy — see server.js's
+// one-time migration in main()). Unlike loadAgents/loadKiosks/etc., this
+// does NOT auto-seed a brand-new Redis database with a fallback: telling
+// "a fresh install" apart from "first boot after upgrading from the old
+// single-password scheme" needs an extra async step (checking that old
+// password), which only the caller (server.js) can do — so on a miss this
+// just returns null and leaves seeding to the caller.
+
+/**
+ * Loads the admin-accounts list from Redis, or null if nothing has been
+ * saved there yet (including "not configured").
+ */
+async function loadAdmins() {
+  if (!configured) return null;
+  try {
+    const raw = await redisCommand(['GET', ADMINS_KEY]);
+    connected = true;
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load admin accounts from Redis, starting from the local file instead:', err.message);
+    return null;
+  }
+}
+
+/** Returns true if the admin-accounts list was actually saved to Redis, false otherwise (including "not configured"). */
+async function persistAdmins(admins) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', ADMINS_KEY, JSON.stringify(admins)]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save the admin-accounts list to Redis — this change may be lost on the next restart/redeploy:', err.message);
     return false;
   }
 }
@@ -524,6 +566,8 @@ module.exports = {
   persistKioskGroups,
   loadAdminPassword,
   persistAdminPassword,
+  loadAdmins,
+  persistAdmins,
   loadCallLog,
   appendCallLogEntry,
   loadMissedCallLog,

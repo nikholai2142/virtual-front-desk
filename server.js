@@ -309,29 +309,58 @@ function normalizeLanguages(input) {
 }
 
 // ---- Admin dashboard auth ---------------------------------------------
-// One shared password, same demo-grade approach as the agent passwords —
-// swap for real auth before this handles anything that matters. Set your
-// own via admin.json ({ "password": "..." }) instead of editing this file,
-// or change it from the dashboard itself (Settings), which updates this the
-// same way the agent list is updated — local file + Redis when configured.
-const ADMIN_FILE = path.join(__dirname, 'admin.json');
-let ADMIN_PASSWORD = (() => {
+// Named admin accounts (id, name, password), same demo-grade approach and
+// shape as AGENTS — swap for real auth before this handles anything that
+// matters. Every admin account has identical full access; there are no
+// separate roles. Auth is just "does this request's X-Admin-Password
+// header match ANY admin account's password" (no sessions/cookies — see
+// handleAdminApi below); which account matched is only used to know who's
+// who (e.g. so an admin can't remove their own account out from under
+// themselves — see the DELETE endpoint below).
+const ADMINS_FILE = path.join(__dirname, 'admins.json');
+// Tracks whether admins.json already existed on disk (as opposed to this
+// being a brand-new install, or the first boot after upgrading from the
+// old single shared admin password) — main() below uses this to decide
+// whether the one-time migration from that old scheme needs to run, so an
+// existing deploy's admin isn't locked out by the upgrade.
+let adminsFileExisted = true;
+function readLocalAdminsFile() {
   try {
-    return JSON.parse(fs.readFileSync(ADMIN_FILE, 'utf8')).password;
+    return JSON.parse(fs.readFileSync(ADMINS_FILE, 'utf8'));
+  } catch {
+    adminsFileExisted = false;
+    return [{ id: crypto.randomUUID(), name: 'Admin', password: 'letmein' }];
+  }
+}
+let ADMINS = readLocalAdminsFile(); // replaced with the real Redis-backed list (and migrated from any pre-existing single admin password) during startup, see main() below
+
+/** Saves the current ADMINS array. Returns true only if it actually reached persistent storage. */
+async function saveAdmins() {
+  try {
+    fs.writeFileSync(ADMINS_FILE, JSON.stringify(ADMINS, null, 2));
+  } catch (err) {
+    console.error('Could not write admins.json locally (non-fatal):', err.message);
+  }
+  return store.persistAdmins(ADMINS);
+}
+
+/** The admin account whose password matches this request's auth header — always non-null once past the auth check in handleAdminApi. */
+function currentAdmin(req) {
+  return ADMINS.find((a) => a.password === req.headers['x-admin-password']);
+}
+
+/**
+ * Reads the OLD single shared admin password (admin.json's `.password`
+ * field), from before named admin accounts existed. Used only by the
+ * one-time migration in main() below — every other admin.json read/write
+ * in this file now goes through ADMINS/admins.json instead.
+ */
+function readLegacyAdminPassword() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'admin.json'), 'utf8')).password;
   } catch {
     return 'letmein';
   }
-})(); // replaced with the real Redis-backed value during startup, see main() below
-
-/** Saves the current admin password. Returns true only if it actually reached persistent storage. */
-async function saveAdminPassword(password) {
-  ADMIN_PASSWORD = password;
-  try {
-    fs.writeFileSync(ADMIN_FILE, JSON.stringify({ password }, null, 2));
-  } catch (err) {
-    console.error('Could not write admin.json locally (non-fatal):', err.message);
-  }
-  return store.persistAdminPassword(password);
 }
 
 // ---- App config (video call configuration) -----------------------------
@@ -1026,9 +1055,10 @@ async function handlePasswordResetRequest(req, res) {
 // ======================================================================
 // Admin API — manage agents and view performance.
 // ======================================================================
-// Auth is a single shared password sent as `X-Admin-Password` on every
-// request (no sessions/cookies — this is a small internal tool, not a
-// public-facing login system). Swap for real auth before this matters.
+// Auth is a password sent as `X-Admin-Password` on every request, checked
+// against any admin account (no sessions/cookies — this is a small
+// internal tool, not a public-facing login system). Swap for real auth
+// before this matters.
 
 /**
  * Every call log entry belonging to one agent. Matches by agentId when the
@@ -1721,7 +1751,7 @@ async function handleMessengerWebhookPost(req, res) {
 }
 
 async function handleAdminApi(req, res, urlObj) {
-  if (req.headers['x-admin-password'] !== ADMIN_PASSWORD) {
+  if (!ADMINS.some((a) => a.password === req.headers['x-admin-password'])) {
     sendJson(res, 401, { error: 'unauthorized' });
     return;
   }
@@ -2178,15 +2208,83 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // Self-service: change the password of whichever admin account this
+  // request is authenticated as (identified by matching the auth header —
+  // see currentAdmin() above), re-confirming it via `currentPassword`
+  // first. To reset a *different* admin's password directly (no current-
+  // password confirmation needed, same pattern as agents/kiosks), see the
+  // POST /api/admin/admins/:id/password endpoint below instead.
   if (urlObj.pathname === '/api/admin/change-password' && req.method === 'POST') {
     let body;
     try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const me = currentAdmin(req);
     const currentPassword = String(body.currentPassword || '');
     const newPassword = String(body.newPassword || '').trim().slice(0, 60);
-    if (currentPassword !== ADMIN_PASSWORD) { sendJson(res, 401, { error: 'current password is incorrect' }); return; }
+    if (currentPassword !== me.password) { sendJson(res, 401, { error: 'current password is incorrect' }); return; }
     if (newPassword.length < 4) { sendJson(res, 400, { error: 'new password must be at least 4 characters' }); return; }
-    const persisted = await saveAdminPassword(newPassword);
+    if (ADMINS.some((a) => a.id !== me.id && a.password === newPassword)) {
+      sendJson(res, 409, { error: 'that password is already in use by another admin' });
+      return;
+    }
+    me.password = newPassword;
+    const persisted = await saveAdmins();
     sendJson(res, 200, { ok: true, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  // Admin accounts — same shape and management pattern as agents (list,
+  // add, remove, direct password reset). Every admin has identical full
+  // access; the only special rule is that an admin can't remove their own
+  // account, or the last remaining one, so nobody locks everyone out.
+  if (urlObj.pathname === '/api/admin/admins' && req.method === 'GET') {
+    sendJson(res, 200, { admins: ADMINS, meId: currentAdmin(req).id });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/admins' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const name = String(body.name || '').trim().slice(0, 60);
+    const password = String(body.password || '').trim().slice(0, 60);
+    if (!name || !password) { sendJson(res, 400, { error: 'name and password are both required' }); return; }
+    if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
+    if (ADMINS.some((a) => a.password === password)) { sendJson(res, 409, { error: 'that password is already in use' }); return; }
+    ADMINS.push({ id: crypto.randomUUID(), name, password });
+    const persisted = await saveAdmins();
+    sendJson(res, 201, { admins: ADMINS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const adminDeleteMatch = urlObj.pathname.match(/^\/api\/admin\/admins\/([^/]+)$/);
+  if (adminDeleteMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(adminDeleteMatch[1]);
+    const me = currentAdmin(req);
+    if (id === me.id) { sendJson(res, 400, { error: "You can't remove your own admin account while signed in as it — sign in as a different admin to remove this one." }); return; }
+    if (ADMINS.length <= 1) { sendJson(res, 400, { error: 'Cannot remove the last admin account.' }); return; }
+    const before = ADMINS.length;
+    ADMINS = ADMINS.filter((a) => a.id !== id);
+    if (ADMINS.length === before) { sendJson(res, 404, { error: 'no admin account with that id' }); return; }
+    const persisted = await saveAdmins();
+    sendJson(res, 200, { admins: ADMINS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const adminPasswordMatch = urlObj.pathname.match(/^\/api\/admin\/admins\/([^/]+)\/password$/);
+  if (adminPasswordMatch && req.method === 'POST') {
+    const id = decodeURIComponent(adminPasswordMatch[1]);
+    const admin = ADMINS.find((a) => a.id === id);
+    if (!admin) { sendJson(res, 404, { error: 'no admin account with that id' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const password = String(body.password || '').trim().slice(0, 60);
+    if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
+    if (ADMINS.some((a) => a.id !== id && a.password === password)) {
+      sendJson(res, 409, { error: 'that password is already in use by another admin' });
+      return;
+    }
+    admin.password = password;
+    const persisted = await saveAdmins();
+    sendJson(res, 200, { admins: ADMINS, persisted, persistenceConfigured: store.configured });
     return;
   }
 
@@ -2868,7 +2966,28 @@ async function main() {
     await saveKiosks();
   }
   KIOSK_GROUPS = await store.loadKioskGroups(KIOSK_GROUPS);
-  ADMIN_PASSWORD = await store.loadAdminPassword(ADMIN_PASSWORD);
+
+  // Admin accounts — same seed/fallback/Redis pattern as the above, except
+  // the very first boot after upgrading from the old single shared admin
+  // password needs one extra step: carrying that password over as the
+  // first (and, until more are added, only) account's password rather
+  // than falling back to a fresh 'letmein' default, so nobody already
+  // using this app is locked out by the upgrade. That first-boot case is
+  // "no admins.json existed on disk AND (Redis isn't configured, or
+  // nothing's been saved to its vfd:admins key yet)" — loadAdmins()
+  // returns null in both the "not configured" and "nothing saved yet"
+  // cases, so adminsFileExisted (captured before this ever writes
+  // anything, see readLocalAdminsFile() above) is what tells them apart
+  // from an already-migrated install with no Redis.
+  const redisAdmins = await store.loadAdmins();
+  if (redisAdmins) {
+    ADMINS = redisAdmins;
+  } else if (!adminsFileExisted) {
+    const legacyPassword = await store.loadAdminPassword(readLegacyAdminPassword());
+    ADMINS = [{ id: crypto.randomUUID(), name: 'Admin', password: legacyPassword }];
+    console.log('[admins] migrated the existing admin password into the new named-admin-accounts scheme (account name: "Admin") — add more from User Management.');
+    await saveAdmins();
+  }
   CONFIG = await store.loadConfig(CONFIG);
   callLog.push(...await store.loadCallLog());
   missedCallLog.push(...await store.loadMissedCallLog());
@@ -2902,7 +3021,7 @@ async function main() {
     console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
     console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
     console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
-    console.log(`  Loaded ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${KIOSK_GROUPS.length} kiosk group(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
+    console.log(`  Loaded ${ADMINS.length} admin account(s), ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${KIOSK_GROUPS.length} kiosk group(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
   });
 }
 
