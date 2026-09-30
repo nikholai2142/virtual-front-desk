@@ -140,6 +140,25 @@
     </div>
   </section>
 
+  <!-- SIGN-OUT CONFIRMATION: guards the idle screen's "Sign out" link so a
+       guest can't casually sign the kiosk out from under staff. Sits above
+       whichever .screen is active rather than being one itself, so it's
+       shown/hidden independently of showScreen(). Re-entering this kiosk's
+       own password is checked server-side (server.js's 'kiosk-logout'
+       handler) — nothing here is trusted on its own. -->
+  <div id="kiosk-signout-modal" class="modal-overlay hidden">
+    <form id="kiosk-signout-form" class="modal-card">
+      <h2>Sign out this kiosk?</h2>
+      <p class="sub">This is for staff use — guests don't need to sign out. Enter the kiosk password to confirm.</p>
+      <input id="kiosk-signout-input" type="password" placeholder="Kiosk password" maxlength="60" autocomplete="current-password" />
+      <p id="kiosk-signout-error" class="error hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-signout" class="btn btn-ghost">Cancel</button>
+        <button type="submit" class="btn btn-primary">Sign Out</button>
+      </div>
+    </form>
+  </div>
+
   <script src="kiosk.js"></script>
 </body>
 </html>

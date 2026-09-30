@@ -76,11 +76,16 @@ the same way agent accounts are managed:
   one out (or use the admin dashboard's **Force sign out**, below) to
   free the slot.
 - **Signing out**: tap "Sign out" at the bottom of the kiosk's idle
-  screen. This also happens automatically, on the server's side, within
-  about 20-40 seconds if a signed-in device loses power or network
-  entirely without signing out cleanly (the same heartbeat that detects a
-  dropped agent or guest connection — see "How it works" above) — so a
-  kiosk that's unplugged doesn't leave its account permanently locked out.
+  screen, then re-enter the kiosk's password to confirm — that password
+  prompt is a deliberate safety net, since the "Sign out" link itself is
+  reachable by anyone standing at the kiosk, not just staff, and a wrong
+  or blank entry leaves the device signed in. The password is checked
+  server-side, not just in the browser. This also happens automatically,
+  on the server's side, within about 20-40 seconds if a signed-in device
+  loses power or network entirely without signing out cleanly (the same
+  heartbeat that detects a dropped agent or guest connection — see "How
+  it works" above) — so a kiosk that's unplugged doesn't leave its
+  account permanently locked out.
 - **Managing kiosk accounts**: add, remove, or force-sign-out a kiosk
   account from the admin dashboard's User Management page → **Kiosk
   accounts** panel, the same way agent accounts are managed. Removing an
@@ -620,6 +625,14 @@ Dashboard to one specific agent always shows **0** here — pick "All
 agents" (or filter by kiosk only) to see it. Like the rest of the
 Dashboard, it resets to the last 200 entries on a restart unless
 [persistent storage](#persistent-storage-agents--call-history) is set up.
+
+Below the chart, a **Missed calls** list shows each of those unanswered
+calls individually — which kiosk it came from, the date and time it was
+queued, how long the guest waited, and how it ended ("Guest gave up
+waiting" vs. "Guest disconnected") — filtered by the same date range and
+kiosk picker as the rest of the page. Like "Not answered" above, this list
+is always empty when the Agent filter is set to a specific agent, since a
+call that was never answered never had one.
 
 ### Agent Performance
 

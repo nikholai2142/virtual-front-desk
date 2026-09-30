@@ -83,6 +83,34 @@ function showKioskLoginError(text) {
   setKioskLoginMessage(text, { error: true });
 }
 
+// ---- Sign-out confirmation modal (guards the idle screen's "Sign out"
+// link — see kiosk.html's comment on #kiosk-signout-modal) ----
+function setKioskSignoutBusy(busy) {
+  const btn = document.querySelector('#kiosk-signout-form button[type="submit"]');
+  if (btn) { btn.disabled = busy; btn.textContent = busy ? 'Signing out…' : 'Sign Out'; }
+}
+
+function setKioskSignoutMessage(text) {
+  const el = document.getElementById('kiosk-signout-error');
+  if (!text) { el.classList.add('hidden'); return; }
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+function openKioskSignoutModal() {
+  document.getElementById('kiosk-signout-input').value = '';
+  setKioskSignoutMessage(null);
+  setKioskSignoutBusy(false);
+  document.getElementById('kiosk-signout-modal').classList.remove('hidden');
+  document.getElementById('kiosk-signout-input').focus();
+}
+
+function closeKioskSignoutModal() {
+  document.getElementById('kiosk-signout-modal').classList.add('hidden');
+  document.getElementById('kiosk-signout-input').value = '';
+  setKioskSignoutMessage(null);
+}
+
 function scheduleKioskReconnect() {
   clearTimeout(kioskReconnectTimer);
   kioskReconnectTimer = setTimeout(() => {
@@ -256,6 +284,15 @@ function connectWS() {
 }
 
 function onWsClose() {
+  // A sign-out confirmation in flight when the connection drops would
+  // otherwise be stuck on "Signing out…" forever (the kiosk reconnects
+  // and relogs in below, but that ack for the logout attempt is never
+  // coming) — reset it rather than leaving a dead button behind.
+  if (!document.getElementById('kiosk-signout-modal').classList.contains('hidden')) {
+    setKioskSignoutBusy(false);
+    setKioskSignoutMessage('Lost connection — try again.');
+  }
+
   const wasOnCall = screens['screen-call'].classList.contains('active') ||
                      screens['screen-waiting'].classList.contains('active');
   if (kioskName) {
@@ -318,11 +355,22 @@ async function handleServerMessage(msg) {
 
     case 'kiosk-logout-ok':
       kioskName = null;
+      sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
       sessionStorage.removeItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
       document.getElementById('kiosk-login-input').value = '';
       setKioskLoginMessage(null);
+      closeKioskSignoutModal();
       applyKioskBranding(null); // back to the site-wide default look
       showScreen('screen-kiosk-setup');
+      break;
+
+    case 'kiosk-logout-fail':
+      // Wrong password on the sign-out confirmation — stay signed in and
+      // keep the modal open rather than treating this like a real sign-out.
+      setKioskSignoutBusy(false);
+      setKioskSignoutMessage('Incorrect password.');
+      document.getElementById('kiosk-signout-input').value = '';
+      document.getElementById('kiosk-signout-input').focus();
       break;
 
     case 'kiosk-forced-logout':
@@ -685,16 +733,24 @@ document.getElementById('kiosk-login-form').addEventListener('submit', (e) => {
 });
 
 document.getElementById('btn-kiosk-sign-out').addEventListener('click', () => {
-  wsSend({ type: 'kiosk-logout' });
-  sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
-  sessionStorage.removeItem(KIOSK_SESSION_TOKEN_STORAGE_KEY);
-  // Optimistic — the server's kiosk-logout-ok ack (handled above) lands
-  // shortly after and is a harmless no-op by then.
-  kioskName = null;
-  document.getElementById('kiosk-login-input').value = '';
-  setKioskLoginMessage(null);
-  applyKioskBranding(null); // back to the site-wide default look
-  showScreen('screen-kiosk-setup');
+  openKioskSignoutModal();
+});
+
+document.getElementById('btn-cancel-signout').addEventListener('click', () => {
+  closeKioskSignoutModal();
+});
+
+document.getElementById('kiosk-signout-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const value = document.getElementById('kiosk-signout-input').value;
+  if (!value) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    setKioskSignoutMessage('Not connected right now — try again in a moment.');
+    return;
+  }
+  setKioskSignoutBusy(true);
+  setKioskSignoutMessage(null);
+  wsSend({ type: 'kiosk-logout', password: value });
 });
 
 document.getElementById('btn-cancel-connecting').addEventListener('click', () => {

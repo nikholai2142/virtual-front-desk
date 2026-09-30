@@ -866,6 +866,7 @@ async function loadOverview() {
     renderOverviewTiles(data.totals);
     lastOverviewEntries = data.entries;
     renderCallsChartFromCache();
+    renderMissedCallsList(data.missed || []);
   } catch (err) {
     if (err.status === 401) return; // the next refreshAll() tick will handle bouncing back to sign-in
     console.warn('Could not load dashboard overview:', err);
@@ -881,6 +882,32 @@ function renderOverviewTiles(t) {
   document.getElementById('ov-total-talk').textContent = formatDuration(t.totalTalkSeconds);
   document.getElementById('ov-hold').textContent = t.totalHoldCount ? `${formatDuration(t.totalHoldSeconds)} (${t.totalHoldCount}×)` : '0:00';
   document.getElementById('ov-rating').textContent = t.ratingCount ? `${starGlyphs(t.avgRating)} ${t.avgRating.toFixed(1)}` : '—';
+}
+
+function missedCallOutcomeLabel(outcome) {
+  if (outcome === 'guest-cancelled') return 'Guest gave up waiting';
+  if (outcome === 'guest-disconnected') return 'Guest disconnected';
+  return outcome || 'Not answered';
+}
+
+function renderMissedCallsList(missed) {
+  const el = document.getElementById('missed-calls-list');
+  if (!missed.length) {
+    el.innerHTML = '<p class="empty-note">No missed calls in this range.</p>';
+    return;
+  }
+  el.innerHTML = '';
+  missed.forEach((m) => {
+    const when = new Date(m.queuedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const waited = formatDuration(Math.max(0, Math.round((m.endedAt - m.queuedAt) / 1000)));
+    const row = document.createElement('div');
+    row.className = 'agent-call-row';
+    row.innerHTML = `
+      <div class="acr-top"><span>${escapeHtml(m.topic || 'General')}${m.kioskId ? ` · ${escapeHtml(m.kioskId)}` : ''}</span><span>${when}</span></div>
+      <div>Waited ${waited} · ${escapeHtml(missedCallOutcomeLabel(m.outcome))}</div>
+    `;
+    el.appendChild(row);
+  });
 }
 
 /** Groups filtered call entries into day or month buckets spanning the resolved range (zero-filled, so gaps show as gaps, not a shorter chart). Bucketing happens in the admin's own browser timezone — the server only filters, it doesn't guess a timezone. */

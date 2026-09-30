@@ -2417,9 +2417,27 @@ async function handleAdminApi(req, res, urlObj) {
           return true;
         });
 
+    // Individual unanswered calls (who tried, from which kiosk, when, and
+    // how it ended) — same filtering as missedFiltered above, just not
+    // collapsed down to a count, so the dashboard can list them rather than
+    // only showing the "Not answered" tile.
+    const missed = missedFiltered
+      .slice()
+      .sort((a, b) => b.queuedAt - a.queuedAt)
+      .map((e) => ({
+        callId: e.callId,
+        topic: e.topic,
+        kioskId: e.kioskId,
+        language: e.language,
+        queuedAt: e.queuedAt,
+        endedAt: e.endedAt,
+        outcome: e.outcome,
+      }));
+
     sendJson(res, 200, {
       totals: { ...statsForEntries(filtered), notAnswered: missedFiltered.length },
       entries,
+      missed,
       filters: {
         agents: computeAgentStats().map((r) => ({
           value: r.agentId || `name:${encodeURIComponent(r.agentName)}`,
@@ -2500,6 +2518,17 @@ function handleGuestConnection(conn) {
     if (!kioskAccountId) return; // must sign in first — everything below is a signed-in kiosk's own connection
 
     if (msg.type === 'kiosk-logout') {
+      // The idle screen's "Sign out" link is reachable by anyone standing
+      // at the kiosk, not just staff, so signing out for real requires
+      // re-entering this kiosk account's own password — the same gate as
+      // signing in, just checked before undoing it. Without this, a guest
+      // (or a prankster) could sign a kiosk out and leave it dead until
+      // staff notice and walk over to re-enter the password themselves.
+      const kiosk = KIOSKS.find((k) => k.id === kioskAccountId);
+      if (!kiosk || kiosk.password !== String(msg.password || '')) {
+        conn.send({ type: 'kiosk-logout-fail' });
+        return;
+      }
       if (kioskSessions.get(kioskAccountId) === conn) kioskSessions.delete(kioskAccountId);
       if (myCallId) { endCall(myCallId, 'guest-disconnected'); myCallId = null; }
       conn.send({ type: 'kiosk-logout-ok' });
