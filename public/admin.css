@@ -180,6 +180,15 @@ html, body {
 .lang-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 .empty-note { color: var(--sub); font-size: 13px; }
 
+.kiosk-group-label {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub);
+}
+.kiosk-group-select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+.kiosk-group-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .add-agent-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .add-agent-row input {
   flex: 1 1 120px; padding: 10px; border-radius: 8px; border: 1px solid var(--border);

@@ -100,6 +100,27 @@ function readLocalKiosksFile() {
 }
 let KIOSKS = readLocalKiosksFile(); // replaced with the real Redis-backed list during startup, see main() below
 
+/**
+ * Backward-compatible migration for kiosk records saved before branding
+ * moved from a per-kiosk override to kiosk groups (see "Kiosk groups"
+ * below). Older records may carry a `branding` object of their own and
+ * have no `groupId` at all. Per-kiosk branding wasn't carried forward into
+ * groups — an admin recreates the look as a group and assigns kiosks to it
+ * — so this just drops the stale field and makes sure `groupId` exists
+ * (defaulting to none, i.e. the site-wide default look) rather than
+ * leaving dead data sitting in every kiosk record.
+ */
+function migrateKioskRecords(kiosks) {
+  let changed = false;
+  const migrated = kiosks.map((k) => {
+    const next = { ...k };
+    if ('branding' in next) { delete next.branding; changed = true; }
+    if (!('groupId' in next)) { next.groupId = null; changed = true; }
+    return next;
+  });
+  return { kiosks: migrated, changed };
+}
+
 /** Saves the current KIOSKS array. Returns true only if it actually reached persistent storage. */
 async function saveKiosks() {
   try {
@@ -110,13 +131,45 @@ async function saveKiosks() {
   return store.persistKiosks(KIOSKS);
 }
 
-// ---- Per-kiosk branding (logo, background photo, accent color) ---------
-// Each kiosk account can optionally override the global kiosk.css look —
-// see the admin dashboard's Kiosk Accounts panel. Uploaded images are
-// stored on local disk under public/, so the existing static file server
-// (serveStatic, below) serves them with no extra routing needed — the
-// same way the global public/branding/ assets already are.
-const KIOSK_BRANDING_DIR = path.join(PUBLIC_DIR, 'branding', 'kiosks');
+// ---- Kiosk groups (logo, background photo, accent color) ---------------
+// A kiosk account can belong to one group, which is where branding that
+// overrides the global kiosk.css look actually lives — see the admin
+// dashboard's Kiosk Groups panel. Grouping (rather than branding each kiosk
+// individually) means every kiosk at, say, one property or on one floor
+// gets the same look from a single place, and updating the group updates
+// all of them at once. Same seed/fallback/Redis pattern as KIOSKS above.
+const KIOSK_GROUPS_FILE = path.join(__dirname, 'kiosk-groups.json');
+function readLocalKioskGroupsFile() {
+  try {
+    return JSON.parse(fs.readFileSync(KIOSK_GROUPS_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+let KIOSK_GROUPS = readLocalKioskGroupsFile(); // replaced with the real Redis-backed list during startup, see main() below
+
+/** Saves the current KIOSK_GROUPS array. Returns true only if it actually reached persistent storage. */
+async function saveKioskGroups() {
+  try {
+    fs.writeFileSync(KIOSK_GROUPS_FILE, JSON.stringify(KIOSK_GROUPS, null, 2));
+  } catch (err) {
+    console.error('Could not write kiosk-groups.json locally (non-fatal):', err.message);
+  }
+  return store.persistKioskGroups(KIOSK_GROUPS);
+}
+
+/** The branding a signed-in kiosk should use right now: its group's, or {} (the site-wide default look) if it has none. */
+function brandingForKiosk(kiosk) {
+  if (!kiosk || !kiosk.groupId) return {};
+  const group = KIOSK_GROUPS.find((g) => g.id === kiosk.groupId);
+  return (group && group.branding) || {};
+}
+
+// Uploaded branding images are stored on local disk under public/, so the
+// existing static file server (serveStatic, below) serves them with no
+// extra routing needed — the same way the global public/branding/ assets
+// already are.
+const KIOSK_GROUP_BRANDING_DIR = path.join(PUBLIC_DIR, 'branding', 'groups');
 const MAX_BRANDING_UPLOAD_BYTES = 8 * 1024 * 1024; // JSON body cap — covers base64 overhead on a ~5MB image
 const MAX_BRANDING_IMAGE_BYTES = 5 * 1024 * 1024; // decoded image size cap, per file
 const BRANDING_IMAGE_EXT_BY_MIME = {
@@ -1779,7 +1832,7 @@ async function handleAdminApi(req, res, urlObj) {
     if (!name || !password) { sendJson(res, 400, { error: 'name and password are both required' }); return; }
     if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
     if (KIOSKS.some((k) => k.password === password)) { sendJson(res, 409, { error: 'that password is already in use' }); return; }
-    const kiosk = { id: crypto.randomUUID(), name, password };
+    const kiosk = { id: crypto.randomUUID(), name, password, groupId: null };
     KIOSKS.push(kiosk);
     const persisted = await saveKiosks();
     sendJson(res, 201, {
@@ -1802,9 +1855,6 @@ async function handleAdminApi(req, res, urlObj) {
       activeConn.close();
       kioskSessions.delete(id);
     }
-    // Clean up any branding images this kiosk had uploaded — nothing else
-    // references them once the account itself is gone.
-    try { fs.rmSync(path.join(KIOSK_BRANDING_DIR, id), { recursive: true, force: true }); } catch { /* non-fatal */ }
     const persisted = await saveKiosks();
     sendJson(res, 200, {
       kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
@@ -1814,17 +1864,81 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
-  // Per-kiosk branding — logo, background photo, and/or accent color
-  // overriding the global kiosk.css defaults for just this kiosk account.
-  // Accepts base64 data URLs rather than multipart form data, matching
-  // this project's zero-dependency approach (no multipart parser). Any
-  // field left out of the body is untouched; `removeLogo`/
-  // `removeBackground` clear that one override back to the global default.
-  const kioskBrandingMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)\/branding$/);
-  if (kioskBrandingMatch && req.method === 'POST') {
-    const id = decodeURIComponent(kioskBrandingMatch[1]);
+  // Assigns (or clears) which kiosk group a kiosk account belongs to —
+  // branding itself lives on the group (see the Kiosk Groups endpoints
+  // below), so this is just a pointer change plus, if the kiosk is
+  // currently signed in, a live push of whichever branding now applies
+  // (the new group's, or {} — the site-wide default look — if ungrouped)
+  // so the change shows up immediately rather than needing a sign-out/
+  // back-in.
+  const kioskGroupMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)\/group$/);
+  if (kioskGroupMatch && req.method === 'POST') {
+    const id = decodeURIComponent(kioskGroupMatch[1]);
     const kiosk = KIOSKS.find((k) => k.id === id);
     if (!kiosk) { sendJson(res, 404, { error: 'no kiosk with that id' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const groupId = body.groupId === null || body.groupId === undefined ? null : String(body.groupId);
+    if (groupId !== null && !KIOSK_GROUPS.some((g) => g.id === groupId)) {
+      sendJson(res, 404, { error: 'no kiosk group with that id' });
+      return;
+    }
+    kiosk.groupId = groupId;
+    const persisted = await saveKiosks();
+    const activeConn = kioskSessions.get(id);
+    if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: brandingForKiosk(kiosk) });
+    sendJson(res, 200, {
+      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
+      persisted,
+      persistenceConfigured: store.configured,
+    });
+    return;
+  }
+
+  // Kiosk groups — branding (logo, background photo, accent color)
+  // overriding the global kiosk.css defaults for every kiosk assigned to
+  // this group. Same shape as the agents/kiosks endpoints above.
+  if (urlObj.pathname === '/api/admin/kiosk-groups' && req.method === 'GET') {
+    sendJson(res, 200, { groups: KIOSK_GROUPS });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/kiosk-groups' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const name = String(body.name || '').trim().slice(0, 60);
+    if (!name) { sendJson(res, 400, { error: 'name is required' }); return; }
+    const group = { id: crypto.randomUUID(), name, branding: {} };
+    KIOSK_GROUPS.push(group);
+    const persisted = await saveKioskGroups();
+    sendJson(res, 201, { groups: KIOSK_GROUPS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const kioskGroupRenameMatch = urlObj.pathname.match(/^\/api\/admin\/kiosk-groups\/([^/]+)\/rename$/);
+  if (kioskGroupRenameMatch && req.method === 'POST') {
+    const id = decodeURIComponent(kioskGroupRenameMatch[1]);
+    const group = KIOSK_GROUPS.find((g) => g.id === id);
+    if (!group) { sendJson(res, 404, { error: 'no kiosk group with that id' }); return; }
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const name = String(body.name || '').trim().slice(0, 60);
+    if (!name) { sendJson(res, 400, { error: 'name is required' }); return; }
+    group.name = name;
+    const persisted = await saveKioskGroups();
+    sendJson(res, 200, { groups: KIOSK_GROUPS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  // Accepts base64 data URLs rather than multipart form data, matching this
+  // project's zero-dependency approach (no multipart parser). Any field
+  // left out of the body is untouched; `removeLogo`/`removeBackground`
+  // clear that one override back to the site-wide default.
+  const kioskGroupBrandingMatch = urlObj.pathname.match(/^\/api\/admin\/kiosk-groups\/([^/]+)\/branding$/);
+  if (kioskGroupBrandingMatch && req.method === 'POST') {
+    const id = decodeURIComponent(kioskGroupBrandingMatch[1]);
+    const group = KIOSK_GROUPS.find((g) => g.id === id);
+    if (!group) { sendJson(res, 404, { error: 'no kiosk group with that id' }); return; }
 
     let body;
     try {
@@ -1835,30 +1949,30 @@ async function handleAdminApi(req, res, urlObj) {
       return;
     }
 
-    const branding = { ...(kiosk.branding || {}) };
-    const kioskDir = path.join(KIOSK_BRANDING_DIR, id);
+    const branding = { ...(group.branding || {}) };
+    const groupDir = path.join(KIOSK_GROUP_BRANDING_DIR, id);
 
     try {
       if (body.removeLogo) {
-        clearBrandingFile(kioskDir, 'logo');
+        clearBrandingFile(groupDir, 'logo');
         delete branding.logoUrl;
       } else if (body.logo && body.logo.dataUrl) {
         const { buf, ext } = decodeBrandingImage(body.logo.dataUrl, { allowSvg: true });
-        fs.mkdirSync(kioskDir, { recursive: true });
-        clearBrandingFile(kioskDir, 'logo');
-        fs.writeFileSync(path.join(kioskDir, `logo${ext}`), buf);
-        branding.logoUrl = `/branding/kiosks/${id}/logo${ext}?v=${Date.now()}`;
+        fs.mkdirSync(groupDir, { recursive: true });
+        clearBrandingFile(groupDir, 'logo');
+        fs.writeFileSync(path.join(groupDir, `logo${ext}`), buf);
+        branding.logoUrl = `/branding/groups/${id}/logo${ext}?v=${Date.now()}`;
       }
 
       if (body.removeBackground) {
-        clearBrandingFile(kioskDir, 'background');
+        clearBrandingFile(groupDir, 'background');
         delete branding.backgroundUrl;
       } else if (body.background && body.background.dataUrl) {
         const { buf, ext } = decodeBrandingImage(body.background.dataUrl, { allowSvg: false });
-        fs.mkdirSync(kioskDir, { recursive: true });
-        clearBrandingFile(kioskDir, 'background');
-        fs.writeFileSync(path.join(kioskDir, `background${ext}`), buf);
-        branding.backgroundUrl = `/branding/kiosks/${id}/background${ext}?v=${Date.now()}`;
+        fs.mkdirSync(groupDir, { recursive: true });
+        clearBrandingFile(groupDir, 'background');
+        fs.writeFileSync(path.join(groupDir, `background${ext}`), buf);
+        branding.backgroundUrl = `/branding/groups/${id}/background${ext}?v=${Date.now()}`;
       }
 
       if (body.accentColor !== undefined) {
@@ -1877,18 +1991,46 @@ async function handleAdminApi(req, res, urlObj) {
       return;
     }
 
-    if (Object.keys(branding).length) kiosk.branding = branding;
-    else delete kiosk.branding;
-
-    const persisted = await saveKiosks();
-    // If this kiosk is currently signed in, push the updated branding to
-    // it live — otherwise an admin's change wouldn't show up until the
+    group.branding = branding;
+    const persisted = await saveKioskGroups();
+    // Push the updated branding live to every currently-signed-in kiosk in
+    // this group — otherwise an admin's change wouldn't show up until each
     // device happens to sign out and back in.
-    const activeConn = kioskSessions.get(id);
-    if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: kiosk.branding || {} });
+    for (const kiosk of KIOSKS) {
+      if (kiosk.groupId !== id) continue;
+      const activeConn = kioskSessions.get(kiosk.id);
+      if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: group.branding });
+    }
+    sendJson(res, 200, { groups: KIOSK_GROUPS, persisted, persistenceConfigured: store.configured });
+    return;
+  }
+
+  const kioskGroupDeleteMatch = urlObj.pathname.match(/^\/api\/admin\/kiosk-groups\/([^/]+)$/);
+  if (kioskGroupDeleteMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(kioskGroupDeleteMatch[1]);
+    const before = KIOSK_GROUPS.length;
+    KIOSK_GROUPS = KIOSK_GROUPS.filter((g) => g.id !== id);
+    if (KIOSK_GROUPS.length === before) { sendJson(res, 404, { error: 'no kiosk group with that id' }); return; }
+    // Any kiosk assigned to this group falls back to the site-wide default
+    // look rather than being left pointing at a group that no longer
+    // exists — and if one's currently signed in, it gets that reset live.
+    let unassignedCount = 0;
+    for (const kiosk of KIOSKS) {
+      if (kiosk.groupId !== id) continue;
+      kiosk.groupId = null;
+      unassignedCount++;
+      const activeConn = kioskSessions.get(kiosk.id);
+      if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: {} });
+    }
+    try { fs.rmSync(path.join(KIOSK_GROUP_BRANDING_DIR, id), { recursive: true, force: true }); } catch { /* non-fatal */ }
+    const [groupsPersisted, kiosksPersisted] = await Promise.all([
+      saveKioskGroups(),
+      unassignedCount ? saveKiosks() : Promise.resolve(true),
+    ]);
     sendJson(res, 200, {
-      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
-      persisted,
+      groups: KIOSK_GROUPS,
+      unassignedKiosks: unassignedCount,
+      persisted: groupsPersisted && kiosksPersisted,
       persistenceConfigured: store.configured,
     });
     return;
@@ -2253,7 +2395,7 @@ function handleGuestConnection(conn) {
       // session too, not just the first one.
       conn.kioskSessionToken = isSameSessionReconnect ? existing.kioskSessionToken : crypto.randomUUID();
       kioskSessions.set(kioskAccountId, conn);
-      conn.send({ type: 'kiosk-login-ok', name: kioskName, branding: match.branding || {}, sessionToken: conn.kioskSessionToken });
+      conn.send({ type: 'kiosk-login-ok', name: kioskName, branding: brandingForKiosk(match), sessionToken: conn.kioskSessionToken });
       return;
     }
 
@@ -2719,6 +2861,13 @@ async function main() {
     await saveAgents();
   }
   KIOSKS = await store.loadKiosks(KIOSKS);
+  const { kiosks: migratedKiosks, changed: kiosksMigrated } = migrateKioskRecords(KIOSKS);
+  KIOSKS = migratedKiosks;
+  if (kiosksMigrated) {
+    console.log('[kiosks] upgraded stored kiosk record(s) to the kiosk-groups scheme (added groupId, dropped any stale per-kiosk branding) — branding now lives on kiosk groups.');
+    await saveKiosks();
+  }
+  KIOSK_GROUPS = await store.loadKioskGroups(KIOSK_GROUPS);
   ADMIN_PASSWORD = await store.loadAdminPassword(ADMIN_PASSWORD);
   CONFIG = await store.loadConfig(CONFIG);
   callLog.push(...await store.loadCallLog());
@@ -2753,7 +2902,7 @@ async function main() {
     console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
     console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
     console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
-    console.log(`  Loaded ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
+    console.log(`  Loaded ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${KIOSK_GROUPS.length} kiosk group(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
   });
 }
 

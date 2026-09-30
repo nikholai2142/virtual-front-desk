@@ -179,8 +179,23 @@
         </section>
 
         <section class="panel panel-full">
+          <h2>Kiosk groups</h2>
+          <p class="stats-hint">Set branding (accent color, logo, background photo) once per group, then assign kiosks to it below — every kiosk in the group gets the same look, and changing the group updates all of them at once, live if they're signed in. A kiosk with no group uses the site-wide default look.</p>
+          <div id="kiosk-groups-list" class="agents-list"></div>
+
+          <form id="add-kiosk-group-form" class="add-agent-form">
+            <h3>Add kiosk group</h3>
+            <div class="add-agent-row">
+              <input id="new-kiosk-group-name" type="text" placeholder="Name (e.g. East Wing)" maxlength="60" />
+              <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+            <p id="add-kiosk-group-error" class="error hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
           <h2>Kiosk accounts</h2>
-          <p class="stats-hint">Each kiosk device signs in with one of these accounts. A kiosk account can only have one active session at a time — signing in on a new device while another is still signed in is rejected until the first signs out (or you force one out below).</p>
+          <p class="stats-hint">Each kiosk device signs in with one of these accounts. A kiosk account can only have one active session at a time — signing in on a new device while another is still signed in is rejected until the first signs out (or you force one out below). Assign a kiosk to a group above to give it that group's branding.</p>
           <div id="kiosks-list" class="agents-list"></div>
 
           <form id="add-kiosk-form" class="add-agent-form">
@@ -217,7 +232,7 @@
           <h2>Kiosk appearance</h2>
           <form id="logo-size-form" class="hold-config-form">
             <label for="logo-size-input">Logo size</label>
-            <p class="sub-tight">Size of the logo shown on the kiosk's sign-in and idle screens (site-wide default — a kiosk with its own uploaded logo via Kiosk accounts → Branding… still uses this size).</p>
+            <p class="sub-tight">Size of the logo shown on the kiosk's sign-in and idle screens (site-wide default — a kiosk group with its own uploaded logo, see User Management → Kiosk groups, still uses this size).</p>
             <div class="hold-config-row">
               <input id="logo-size-input" type="number" min="24" max="320" step="4" />
               <span class="hold-config-unit">px</span>
@@ -311,11 +326,11 @@
     </form>
   </div>
 
-  <!-- KIOSK BRANDING -->
+  <!-- KIOSK GROUP BRANDING -->
   <div id="kiosk-branding-modal" class="modal-overlay hidden">
     <div class="modal-card kiosk-branding-card">
       <h2>Branding — <span id="kiosk-branding-name">—</span></h2>
-      <p class="sub">Override the kiosk look for just this device. Leave a field at its default to use the site-wide look.</p>
+      <p class="sub">Override the kiosk look for every kiosk assigned to this group. Leave a field at its default to use the site-wide look.</p>
 
       <div class="modal-field">
         <label for="kb-accent-hex">Accent color</label>

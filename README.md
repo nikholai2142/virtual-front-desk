@@ -88,9 +88,10 @@ the same way agent accounts are managed:
 - **Renaming a kiosk** (e.g. it's physically moved): there's no separate
   rename — just edit the kiosk's name where its account is managed, or
   remove and re-add it.
-- **Giving a kiosk its own look**: each kiosk account can optionally
-  override the accent color, logo, and background photo — see "Per-kiosk
-  branding" under "Customizing the kiosk's branding" below.
+- **Giving a kiosk its own look**: assign it to a kiosk group, which can
+  optionally override the accent color, logo, and background photo for
+  every kiosk in it — see "Kiosk groups" under "Customizing the kiosk's
+  branding" below.
 
 The kiosk's name travels with every call it starts — agents see it next to
 each waiting call in the queue and in the active-call header (e.g. "Front
@@ -687,10 +688,21 @@ else:
     cleanup (e.g. a tablet that was powered off without signing out
     cleanly, or to hand the same password to a replacement device right
     away).
-  - **Branding…** — override the accent color, logo, and/or background
-    photo for just this one kiosk; a "Custom branding" badge shows on any
-    kiosk that has an override set. See "Per-kiosk branding" under
+  - **Group** — assign this kiosk to a kiosk group (or "No group" for the
+    site-wide default look) from the dropdown on its row. Branding itself
+    is set per group, not per kiosk — see "Kiosk groups" just below.
+
+- **Kiosk groups** — a separate panel for managing branding shared across
+  kiosks:
+  - **Add a group** — enter a name (e.g. "East Wing", "Pool Deck").
+  - **Branding…** — set the accent color, logo, and/or background photo
+    for every kiosk assigned to this group; a "Custom branding" badge
+    shows on any group that has an override set. See "Kiosk groups" under
     "Customizing the kiosk's branding" below.
+  - **Rename** — change the group's name.
+  - **Remove** — click "Remove" on its row (asks for confirmation first,
+    and says how many kiosks are assigned). Any kiosk assigned to it falls
+    back to the site-wide default look, live if it's currently signed in.
 
 ### Configuration
 
@@ -702,8 +714,8 @@ else:
   see "Storage usage" under "Call recordings" below.
 - **Kiosk appearance (logo size)** — set the pixel size (24–320px) of the
   logo shown on the kiosk's sign-in and idle screens. This is the
-  site-wide default; a kiosk with its own uploaded logo (see "Per-kiosk
-  branding" above) is still sized by this setting, so raising it there
+  site-wide default; a kiosk group with its own uploaded logo (see "Kiosk
+  groups" above) is still sized by this setting, so raising it there
   enlarges every kiosk's logo — custom or default — at once. Applies live
   to any kiosk already sitting on its sign-in/idle screen, no reload
   needed.
@@ -1064,7 +1076,7 @@ virtual-front-desk/
 └── public/
     ├── kiosk.html / kiosk.css / kiosk.js   Guest-facing lobby screen
     ├── branding/                           Site-wide kiosk logo/icon/background — see "Customizing the kiosk's branding"
-    │   └── kiosks/<id>/                    Per-kiosk branding overrides, uploaded from the admin dashboard (created on demand)
+    │   └── groups/<id>/                    Kiosk group branding overrides, uploaded from the admin dashboard (created on demand)
     ├── agent.html / agent.css / agent.js   Agent dashboard (calls + WhatsApp/Messenger chats)
     └── admin.html / admin.css / admin.js   Admin dashboard (Dashboard, Agent Performance, User Management, Configuration)
 ```
@@ -1090,11 +1102,11 @@ virtual-front-desk/
 ### Customizing the kiosk's branding
 
 There are two layers of branding, applied in order: a **site-wide
-default** (files in `public/branding/`, used by every kiosk that doesn't
-override it) and an optional **per-kiosk override** (set from the admin
-dashboard, applies only to that one kiosk account — see "Per-kiosk
-branding" below). Neither touches the agent or admin dashboards — this is
-the guest-facing kiosk screen only.
+default** (files in `public/branding/`, used by every kiosk that isn't in
+a group with its own branding) and an optional **kiosk group override**
+(set from the admin dashboard, applies to every kiosk account assigned to
+that group — see "Kiosk groups" below). Neither touches the agent or admin
+dashboards — this is the guest-facing kiosk screen only.
 
 #### Site-wide default
 
@@ -1125,31 +1137,42 @@ busy the photo is. Using a `.png` instead of `.jpg`? Change the one
 to match. Leave the file out entirely and the kiosk falls back to a plain
 light gradient — never a broken image.
 
-#### Per-kiosk branding
+#### Kiosk groups
 
 Since each kiosk device now signs in with its own [kiosk
-account](#multiple-kiosks), a single kiosk account can override the
-site-wide default above — handy for a resort with visually distinct
-zones (e.g. a beach-themed Pool Deck kiosk vs. the main Lobby's look), or
-for white-labeling a specific kiosk for a co-branded partner area.
+account](#multiple-kiosks), branding is set on a **kiosk group** and every
+kiosk account assigned to that group picks it up — handy for a resort with
+visually distinct zones (e.g. a beach-themed Pool Deck group vs. the main
+Lobby's look), a property with several kiosks that should all match, or
+white-labeling a set of kiosks for a co-branded partner area. A kiosk
+assigned to no group just uses the site-wide default above.
 
-Set it from the admin dashboard: **User Management → Kiosk accounts →
-"Branding…"** on that kiosk's row. Three independent overrides, all
-optional — leave any of them unset and that piece falls back to the
-site-wide default:
+Manage it from the admin dashboard: **User Management → Kiosk groups**.
+Create a group, then:
 
-- **Accent color** — replaces the button/highlight color (`#016FB7` by
-  default) for just this kiosk. A slightly darker shade for pressed/hover
-  states is derived from it automatically.
-- **Logo** — PNG, JPEG, WEBP, or SVG, up to 5MB.
-- **Background photo** — PNG, JPEG, or WEBP, up to 5MB.
+1. Click **"Branding…"** on the group's row to set its look. Three
+   independent overrides, all optional — leave any of them unset and that
+   piece falls back to the site-wide default:
+   - **Accent color** — replaces the button/highlight color (`#016FB7` by
+     default) for every kiosk in this group. A slightly darker shade for
+     pressed/hover states is derived from it automatically.
+   - **Logo** — PNG, JPEG, WEBP, or SVG, up to 5MB.
+   - **Background photo** — PNG, JPEG, or WEBP, up to 5MB.
+2. Assign kiosks to it from the **Group** dropdown on each row in the
+   **Kiosk accounts** panel just below. Reassigning a kiosk (or moving it
+   back to "No group") takes effect immediately, live, if that kiosk is
+   currently signed in — no sign-out needed.
 
 Uploaded images are stored under
-`public/branding/kiosks/<kiosk-account-id>/` and served by the same
-static file server as the rest of `public/` — no separate object storage
-needed for this (unlike call recordings, which can optionally go to R2).
-Removing a kiosk account also deletes its uploaded branding files.
+`public/branding/groups/<group-id>/` and served by the same static file
+server as the rest of `public/` — no separate object storage needed for
+this (unlike call recordings, which can optionally go to R2). Removing a
+kiosk group also deletes its uploaded branding files; any kiosk that was
+assigned to it falls back to the site-wide default look (live, if it's
+currently signed in) rather than being left pointing at a group that no
+longer exists.
 
 Branding applies the moment a kiosk device signs in, and updates live
-(no sign-out needed) if you change it from the admin dashboard while that
-kiosk is already signed in.
+(no sign-out needed) if you change the group's branding, or reassign the
+kiosk to a different group, from the admin dashboard while that kiosk is
+already signed in.

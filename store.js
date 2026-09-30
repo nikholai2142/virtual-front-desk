@@ -27,6 +27,7 @@ const configured = Boolean(REST_URL && REST_TOKEN);
 
 const AGENTS_KEY = 'vfd:agents';
 const KIOSKS_KEY = 'vfd:kiosks';
+const KIOSK_GROUPS_KEY = 'vfd:kioskgroups';
 const ADMIN_PASSWORD_KEY = 'vfd:admin:password';
 const CALL_LOG_KEY = 'vfd:calllog';
 // A safety net, not a real limit — this is roughly 135 years of calls at
@@ -155,6 +156,48 @@ async function persistKiosks(kiosks) {
   } catch (err) {
     connected = false;
     console.error('[store] could not save the kiosk account list to Redis — this change may be lost on the next restart/redeploy:', err.message);
+    return false;
+  }
+}
+
+// ---- Kiosk groups ----------------------------------------------------------
+// Each kiosk account can belong to one group (server.js's KIOSK_GROUPS),
+// which is where branding (accent color, logo, background photo) actually
+// lives now — see the admin dashboard's Kiosk Groups panel. Same
+// seed/fallback/Redis pattern as agents/kiosks above.
+
+/**
+ * Loads the kiosk group list from Redis. On a brand-new Redis database
+ * (first deploy) there's nothing there yet, so it seeds Redis from
+ * `fallbackGroups` (the local kiosk-groups.json) and returns that. If Redis
+ * isn't configured or isn't reachable, just returns `fallbackGroups`
+ * unchanged.
+ */
+async function loadKioskGroups(fallbackGroups) {
+  if (!configured) return fallbackGroups;
+  try {
+    const raw = await redisCommand(['GET', KIOSK_GROUPS_KEY]);
+    connected = true;
+    if (raw) return JSON.parse(raw);
+    await redisCommand(['SET', KIOSK_GROUPS_KEY, JSON.stringify(fallbackGroups)]);
+    return fallbackGroups;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load kiosk groups from Redis, starting from the local file instead:', err.message);
+    return fallbackGroups;
+  }
+}
+
+/** Returns true if the kiosk group list was actually saved to Redis, false otherwise (including "not configured"). */
+async function persistKioskGroups(groups) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', KIOSK_GROUPS_KEY, JSON.stringify(groups)]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save the kiosk group list to Redis — this change may be lost on the next restart/redeploy:', err.message);
     return false;
   }
 }
@@ -477,6 +520,8 @@ module.exports = {
   persistAgents,
   loadKiosks,
   persistKiosks,
+  loadKioskGroups,
+  persistKioskGroups,
   loadAdminPassword,
   persistAdminPassword,
   loadCallLog,

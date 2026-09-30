@@ -163,16 +163,18 @@ document.getElementById('btn-refresh').addEventListener('click', refreshAll);
 
 async function refreshAll() {
   try {
-    const [agentsData, statsData, resetData, kiosksData] = await Promise.all([
+    const [agentsData, statsData, resetData, kiosksData, kioskGroupsData] = await Promise.all([
       api('/api/admin/agents'),
       api('/api/admin/stats'),
       api('/api/admin/password-reset-requests'),
       api('/api/admin/kiosks'),
+      api('/api/admin/kiosk-groups'),
     ]);
     renderAgents(agentsData.agents);
     renderTopbarStats(statsData);
     renderResetRequests(resetData.requests);
-    renderKiosks(kiosksData.kiosks);
+    renderKioskGroups(kioskGroupsData.groups, kiosksData.kiosks);
+    renderKiosks(kiosksData.kiosks, kioskGroupsData.groups);
     // Both filtered views (Dashboard's tiles/chart and Agent Performance's
     // charts/table) only need refreshing while actually visible — no point
     // re-fetching and re-drawing something nobody's looking at every 10
@@ -262,7 +264,7 @@ function renderAgents(agents) {
   });
 }
 
-function renderKiosks(kiosks) {
+function renderKiosks(kiosks, groups) {
   const list = document.getElementById('kiosks-list');
   if (!kiosks.length) {
     list.innerHTML = '<p class="empty-note">No kiosk accounts configured.</p>';
@@ -275,10 +277,9 @@ function renderKiosks(kiosks) {
     const statusHtml = k.sessionActive
       ? '<span class="lang-chip active" style="cursor:default">Signed in</span>'
       : '<span class="lang-chip" style="cursor:default">Not signed in</span>';
-    const hasBranding = k.branding && Object.keys(k.branding).length > 0;
-    const brandingBadge = hasBranding
-      ? `<span class="lang-chip active" style="cursor:default">${k.branding.accentColor ? `<span class="branding-swatch" style="background:${escapeHtml(k.branding.accentColor)}"></span>` : ''}Custom branding</span>`
-      : '';
+    const groupOptionsHtml = ['<option value="">No group (default look)</option>']
+      .concat(groups.map((g) => `<option value="${escapeHtml(g.id)}"${g.id === k.groupId ? ' selected' : ''}>${escapeHtml(g.name)}</option>`))
+      .join('');
     row.innerHTML = `
       <div class="agent-row-top">
         <div><span class="agent-name">${escapeHtml(k.name)}</span><span class="agent-secret">Password ${escapeHtml(k.password)}</span></div>
@@ -289,9 +290,10 @@ function renderKiosks(kiosks) {
       </div>
       <div class="agent-row-langs">
         ${statusHtml}
-        ${brandingBadge}
         <button type="button" class="btn-small btn-force-logout" ${k.sessionActive ? '' : 'disabled'}>Force sign out</button>
-        <button type="button" class="btn-small btn-edit-branding">Branding…</button>
+        <label class="kiosk-group-label">Group
+          <select class="kiosk-group-select">${groupOptionsHtml}</select>
+        </label>
       </div>
     `;
     row.querySelector('.agent-remove-btn').addEventListener('click', async () => {
@@ -316,7 +318,85 @@ function renderKiosks(kiosks) {
         alert('Could not force sign out: ' + err.message);
       }
     });
-    row.querySelector('.btn-edit-branding').addEventListener('click', () => openKioskBranding(k));
+    const groupSelect = row.querySelector('.kiosk-group-select');
+    groupSelect.addEventListener('change', async () => {
+      const groupId = groupSelect.value || null;
+      groupSelect.disabled = true;
+      try {
+        const result = await api(`/api/admin/kiosks/${encodeURIComponent(k.id)}/group`, {
+          method: 'POST',
+          body: JSON.stringify({ groupId }),
+        });
+        warnIfNotPersisted(result);
+        refreshAll();
+      } catch (err) {
+        alert('Could not update this kiosk\'s group: ' + err.message);
+        groupSelect.disabled = false;
+        groupSelect.value = k.groupId || '';
+      }
+    });
+    list.appendChild(row);
+  });
+}
+
+function renderKioskGroups(groups, kiosks) {
+  const list = document.getElementById('kiosk-groups-list');
+  if (!groups.length) {
+    list.innerHTML = '<p class="empty-note">No kiosk groups yet — add one below, then assign kiosks to it in Kiosk accounts.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  groups.forEach((g) => {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    const memberCount = kiosks.filter((k) => k.groupId === g.id).length;
+    const hasBranding = g.branding && Object.keys(g.branding).length > 0;
+    const brandingBadge = hasBranding
+      ? `<span class="lang-chip active" style="cursor:default">${g.branding.accentColor ? `<span class="branding-swatch" style="background:${escapeHtml(g.branding.accentColor)}"></span>` : ''}Custom branding</span>`
+      : '<span class="lang-chip" style="cursor:default">Site-wide default look</span>';
+    row.innerHTML = `
+      <div class="agent-row-top">
+        <div><span class="agent-name">${escapeHtml(g.name)}</span><span class="agent-secret">${memberCount} kiosk${memberCount === 1 ? '' : 's'}</span></div>
+        <div class="agent-row-actions">
+          <button type="button" class="btn-small btn-rename-group">Rename</button>
+          <button class="agent-remove-btn" data-id="${escapeHtml(g.id)}">Remove</button>
+        </div>
+      </div>
+      <div class="agent-row-langs">
+        ${brandingBadge}
+        <button type="button" class="btn-small btn-edit-branding">Branding…</button>
+      </div>
+    `;
+    row.querySelector('.btn-rename-group').addEventListener('click', async () => {
+      const name = prompt('Rename this kiosk group:', g.name);
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) { alert('Group name cannot be empty.'); return; }
+      try {
+        const result = await api(`/api/admin/kiosk-groups/${encodeURIComponent(g.id)}/rename`, {
+          method: 'POST',
+          body: JSON.stringify({ name: trimmed }),
+        });
+        warnIfNotPersisted(result);
+        refreshAll();
+      } catch (err) {
+        alert('Could not rename this group: ' + err.message);
+      }
+    });
+    row.querySelector('.agent-remove-btn').addEventListener('click', async () => {
+      const warning = memberCount
+        ? `Remove kiosk group "${g.name}"? ${memberCount} kiosk${memberCount === 1 ? '' : 's'} assigned to it will fall back to the site-wide default look.`
+        : `Remove kiosk group "${g.name}"?`;
+      if (!confirm(warning)) return;
+      try {
+        const result = await api(`/api/admin/kiosk-groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
+        warnIfNotPersisted(result);
+        refreshAll();
+      } catch (err) {
+        alert('Could not remove this group: ' + err.message);
+      }
+    });
+    row.querySelector('.btn-edit-branding').addEventListener('click', () => openKioskBranding(g));
     list.appendChild(row);
   });
 }
@@ -1221,6 +1301,27 @@ document.getElementById('add-kiosk-form').addEventListener('submit', async (e) =
   }
 });
 
+document.getElementById('add-kiosk-group-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('add-kiosk-group-error');
+  errEl.classList.add('hidden');
+  const name = document.getElementById('new-kiosk-group-name').value.trim();
+  if (!name) {
+    errEl.textContent = 'Name is required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    const result = await api('/api/admin/kiosk-groups', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('new-kiosk-group-name').value = '';
+    warnIfNotPersisted(result);
+    refreshAll();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
 // If persistent storage IS set up but this particular save didn't reach it
 // (a transient Redis/network hiccup), say so — otherwise the admin has no
 // way to know the change might not survive a restart.
@@ -1336,10 +1437,11 @@ document.getElementById('change-user-password-form').addEventListener('submit', 
   }
 });
 
-// ---- Kiosk branding ----
+// ---- Kiosk group branding ----
 // Reads a File into a data: URL for the branding upload endpoint, which
 // takes base64 data URLs rather than multipart form data (this project has
-// no multipart parser — see server.js's kiosk branding endpoint comment).
+// no multipart parser — see server.js's kiosk group branding endpoint
+// comment).
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1349,24 +1451,24 @@ function readFileAsDataUrl(file) {
   });
 }
 
-let brandingKioskId = null;
+let brandingGroupId = null;
 let brandingPendingLogoDataUrl = null;
 let brandingPendingBackgroundDataUrl = null;
 let brandingRemoveLogo = false;
 let brandingRemoveBackground = false;
 
-function openKioskBranding(kiosk) {
-  brandingKioskId = kiosk.id;
+function openKioskBranding(group) {
+  brandingGroupId = group.id;
   brandingPendingLogoDataUrl = null;
   brandingPendingBackgroundDataUrl = null;
   brandingRemoveLogo = false;
   brandingRemoveBackground = false;
 
-  document.getElementById('kiosk-branding-name').textContent = kiosk.name;
+  document.getElementById('kiosk-branding-name').textContent = group.name;
   document.getElementById('kiosk-branding-error').classList.add('hidden');
   document.getElementById('kiosk-branding-success').classList.add('hidden');
 
-  const branding = kiosk.branding || {};
+  const branding = group.branding || {};
   const accentHex = document.getElementById('kb-accent-hex');
   const accentPicker = document.getElementById('kb-accent-picker');
   accentHex.value = branding.accentColor || '';
@@ -1469,7 +1571,7 @@ document.getElementById('btn-save-kiosk-branding').addEventListener('click', asy
   const btn = document.getElementById('btn-save-kiosk-branding');
   btn.disabled = true;
   try {
-    const result = await api(`/api/admin/kiosks/${encodeURIComponent(brandingKioskId)}/branding`, {
+    const result = await api(`/api/admin/kiosk-groups/${encodeURIComponent(brandingGroupId)}/branding`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
