@@ -162,14 +162,16 @@ document.getElementById('btn-refresh').addEventListener('click', refreshAll);
 
 async function refreshAll() {
   try {
-    const [agentsData, statsData, resetData] = await Promise.all([
+    const [agentsData, statsData, resetData, kiosksData] = await Promise.all([
       api('/api/admin/agents'),
       api('/api/admin/stats'),
       api('/api/admin/password-reset-requests'),
+      api('/api/admin/kiosks'),
     ]);
     renderAgents(agentsData.agents);
     renderTopbarStats(statsData);
     renderResetRequests(resetData.requests);
+    renderKiosks(kiosksData.kiosks);
     // Both filtered views (Dashboard's tiles/chart and Agent Performance's
     // charts/table) only need refreshing while actually visible — no point
     // re-fetching and re-drawing something nobody's looking at every 10
@@ -249,6 +251,59 @@ function renderAgents(agents) {
         }
       });
     });
+    list.appendChild(row);
+  });
+}
+
+function renderKiosks(kiosks) {
+  const list = document.getElementById('kiosks-list');
+  if (!kiosks.length) {
+    list.innerHTML = '<p class="empty-note">No kiosk accounts configured.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  kiosks.forEach((k) => {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    const statusHtml = k.sessionActive
+      ? '<span class="lang-chip active" style="cursor:default">Signed in</span>'
+      : '<span class="lang-chip" style="cursor:default">Not signed in</span>';
+    const hasBranding = k.branding && Object.keys(k.branding).length > 0;
+    const brandingBadge = hasBranding
+      ? `<span class="lang-chip active" style="cursor:default">${k.branding.accentColor ? `<span class="branding-swatch" style="background:${escapeHtml(k.branding.accentColor)}"></span>` : ''}Custom branding</span>`
+      : '';
+    row.innerHTML = `
+      <div class="agent-row-top">
+        <div><span class="agent-name">${escapeHtml(k.name)}</span><span class="agent-secret">Password ${escapeHtml(k.password)}</span></div>
+        <button class="agent-remove-btn" data-id="${escapeHtml(k.id)}">Remove</button>
+      </div>
+      <div class="agent-row-langs">
+        ${statusHtml}
+        ${brandingBadge}
+        <button type="button" class="btn-small btn-force-logout" ${k.sessionActive ? '' : 'disabled'}>Force sign out</button>
+        <button type="button" class="btn-small btn-edit-branding">Branding…</button>
+      </div>
+    `;
+    row.querySelector('.agent-remove-btn').addEventListener('click', async () => {
+      if (!confirm(`Remove kiosk account "${k.name}"? Any device currently signed in will be signed out immediately.`)) return;
+      try {
+        const result = await api(`/api/admin/kiosks/${encodeURIComponent(k.id)}`, { method: 'DELETE' });
+        warnIfNotPersisted(result);
+        refreshAll();
+      } catch (err) {
+        alert('Could not remove kiosk account: ' + err.message);
+      }
+    });
+    row.querySelector('.btn-force-logout').addEventListener('click', async () => {
+      if (!confirm(`Force sign out "${k.name}" from its current device?`)) return;
+      try {
+        await api(`/api/admin/kiosks/${encodeURIComponent(k.id)}/force-logout`, { method: 'POST' });
+        refreshAll();
+      } catch (err) {
+        alert('Could not force sign out: ' + err.message);
+      }
+    });
+    row.querySelector('.btn-edit-branding').addEventListener('click', () => openKioskBranding(k));
     list.appendChild(row);
   });
 }
@@ -1081,6 +1136,36 @@ document.getElementById('add-agent-form').addEventListener('submit', async (e) =
   }
 });
 
+// ---- Add kiosk ----
+
+document.getElementById('add-kiosk-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('add-kiosk-error');
+  errEl.classList.add('hidden');
+  const name = document.getElementById('new-kiosk-name').value.trim();
+  const password = document.getElementById('new-kiosk-password').value.trim();
+  if (!name || !password) {
+    errEl.textContent = 'Both name and password are required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (password.length < 4) {
+    errEl.textContent = 'Password must be at least 4 characters.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    const result = await api('/api/admin/kiosks', { method: 'POST', body: JSON.stringify({ name, password }) });
+    document.getElementById('new-kiosk-name').value = '';
+    document.getElementById('new-kiosk-password').value = '';
+    warnIfNotPersisted(result);
+    refreshAll();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
 // If persistent storage IS set up but this particular save didn't reach it
 // (a transient Redis/network hiccup), say so — otherwise the admin has no
 // way to know the change might not survive a restart.
@@ -1143,6 +1228,159 @@ document.getElementById('change-password-form').addEventListener('submit', async
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove('hidden');
+  }
+});
+
+// ---- Kiosk branding ----
+// Reads a File into a data: URL for the branding upload endpoint, which
+// takes base64 data URLs rather than multipart form data (this project has
+// no multipart parser — see server.js's kiosk branding endpoint comment).
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+let brandingKioskId = null;
+let brandingPendingLogoDataUrl = null;
+let brandingPendingBackgroundDataUrl = null;
+let brandingRemoveLogo = false;
+let brandingRemoveBackground = false;
+
+function openKioskBranding(kiosk) {
+  brandingKioskId = kiosk.id;
+  brandingPendingLogoDataUrl = null;
+  brandingPendingBackgroundDataUrl = null;
+  brandingRemoveLogo = false;
+  brandingRemoveBackground = false;
+
+  document.getElementById('kiosk-branding-name').textContent = kiosk.name;
+  document.getElementById('kiosk-branding-error').classList.add('hidden');
+  document.getElementById('kiosk-branding-success').classList.add('hidden');
+
+  const branding = kiosk.branding || {};
+  const accentHex = document.getElementById('kb-accent-hex');
+  const accentPicker = document.getElementById('kb-accent-picker');
+  accentHex.value = branding.accentColor || '';
+  accentPicker.value = branding.accentColor || '#016fb7';
+
+  document.getElementById('kb-logo-file').value = '';
+  document.getElementById('kb-logo-preview').src = branding.logoUrl || 'branding/logo.svg';
+
+  document.getElementById('kb-background-file').value = '';
+  const bgPreview = document.getElementById('kb-background-preview');
+  if (branding.backgroundUrl) {
+    bgPreview.src = branding.backgroundUrl;
+    bgPreview.classList.remove('hidden');
+  } else {
+    bgPreview.src = '';
+    bgPreview.classList.add('hidden');
+  }
+
+  document.getElementById('kiosk-branding-modal').classList.remove('hidden');
+}
+
+document.getElementById('btn-close-kiosk-branding').addEventListener('click', () => {
+  document.getElementById('kiosk-branding-modal').classList.add('hidden');
+});
+
+// Keep the color picker and the hex text field in sync with each other —
+// either one can drive the value, matching how the rest of this app treats
+// a single source of truth per field rather than a separate "apply" step.
+document.getElementById('kb-accent-picker').addEventListener('input', (e) => {
+  document.getElementById('kb-accent-hex').value = e.target.value;
+});
+document.getElementById('kb-accent-hex').addEventListener('input', (e) => {
+  if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
+    document.getElementById('kb-accent-picker').value = e.target.value;
+  }
+});
+document.getElementById('kb-accent-clear').addEventListener('click', () => {
+  document.getElementById('kb-accent-hex').value = '';
+});
+
+document.getElementById('kb-logo-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    brandingPendingLogoDataUrl = await readFileAsDataUrl(file);
+    brandingRemoveLogo = false;
+    document.getElementById('kb-logo-preview').src = brandingPendingLogoDataUrl;
+  } catch (err) {
+    alert('Could not read that file: ' + err.message);
+  }
+});
+document.getElementById('kb-logo-clear').addEventListener('click', () => {
+  brandingPendingLogoDataUrl = null;
+  brandingRemoveLogo = true;
+  document.getElementById('kb-logo-file').value = '';
+  document.getElementById('kb-logo-preview').src = 'branding/logo.svg';
+});
+
+document.getElementById('kb-background-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    brandingPendingBackgroundDataUrl = await readFileAsDataUrl(file);
+    brandingRemoveBackground = false;
+    const preview = document.getElementById('kb-background-preview');
+    preview.src = brandingPendingBackgroundDataUrl;
+    preview.classList.remove('hidden');
+  } catch (err) {
+    alert('Could not read that file: ' + err.message);
+  }
+});
+document.getElementById('kb-background-clear').addEventListener('click', () => {
+  brandingPendingBackgroundDataUrl = null;
+  brandingRemoveBackground = true;
+  document.getElementById('kb-background-file').value = '';
+  const preview = document.getElementById('kb-background-preview');
+  preview.src = '';
+  preview.classList.add('hidden');
+});
+
+document.getElementById('btn-save-kiosk-branding').addEventListener('click', async () => {
+  const errEl = document.getElementById('kiosk-branding-error');
+  const okEl = document.getElementById('kiosk-branding-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+
+  const accentColor = document.getElementById('kb-accent-hex').value.trim();
+  if (accentColor && !/^#[0-9a-fA-F]{6}$/.test(accentColor)) {
+    errEl.textContent = 'Accent color must be a hex code like #016FB7.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  const payload = { accentColor };
+  if (brandingRemoveLogo) payload.removeLogo = true;
+  else if (brandingPendingLogoDataUrl) payload.logo = { dataUrl: brandingPendingLogoDataUrl };
+  if (brandingRemoveBackground) payload.removeBackground = true;
+  else if (brandingPendingBackgroundDataUrl) payload.background = { dataUrl: brandingPendingBackgroundDataUrl };
+
+  const btn = document.getElementById('btn-save-kiosk-branding');
+  btn.disabled = true;
+  try {
+    const result = await api(`/api/admin/kiosks/${encodeURIComponent(brandingKioskId)}/branding`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    warnIfNotPersisted(result);
+    brandingPendingLogoDataUrl = null;
+    brandingPendingBackgroundDataUrl = null;
+    brandingRemoveLogo = false;
+    brandingRemoveBackground = false;
+    okEl.textContent = 'Branding saved.';
+    okEl.classList.remove('hidden');
+    refreshAll();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
   }
 });
 

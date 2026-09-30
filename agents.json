@@ -1,4 +1,18 @@
 [
-  { "id": "a1b2c3d4-0000-4000-8000-000000000001", "name": "Alex", "password": "alex1234" },
-  { "id": "a1b2c3d4-0000-4000-8000-000000000002", "name": "Sam", "password": "sam5678" }
+  {
+    "id": "06233277-3998-4b2f-bf27-179aac167edc",
+    "name": "Alex",
+    "password": "alex1234",
+    "languages": [
+      "en"
+    ]
+  },
+  {
+    "id": "59a232d5-3306-482c-b32d-b8fb33298423",
+    "name": "Sam",
+    "password": "sam5678",
+    "languages": [
+      "en"
+    ]
+  }
 ]

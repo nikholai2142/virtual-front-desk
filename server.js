@@ -85,6 +85,74 @@ async function saveAgents() {
   return store.persistAgents(AGENTS);
 }
 
+// ---- Kiosk accounts (demo auth) --------------------------------------
+// Each physical kiosk device signs in with one of these (name + password)
+// instead of just picking a free-text label the way it used to — see
+// kioskSessions below for the single-active-session enforcement this
+// enables. Same seed/fallback/Redis pattern as AGENTS above.
+const KIOSKS_FILE = path.join(__dirname, 'kiosks.json');
+function readLocalKiosksFile() {
+  try {
+    return JSON.parse(fs.readFileSync(KIOSKS_FILE, 'utf8'));
+  } catch {
+    return [{ id: crypto.randomUUID(), name: 'Lobby', password: 'lobby1234' }];
+  }
+}
+let KIOSKS = readLocalKiosksFile(); // replaced with the real Redis-backed list during startup, see main() below
+
+/** Saves the current KIOSKS array. Returns true only if it actually reached persistent storage. */
+async function saveKiosks() {
+  try {
+    fs.writeFileSync(KIOSKS_FILE, JSON.stringify(KIOSKS, null, 2));
+  } catch (err) {
+    console.error('Could not write kiosks.json locally (non-fatal):', err.message);
+  }
+  return store.persistKiosks(KIOSKS);
+}
+
+// ---- Per-kiosk branding (logo, background photo, accent color) ---------
+// Each kiosk account can optionally override the global kiosk.css look —
+// see the admin dashboard's Kiosk Accounts panel. Uploaded images are
+// stored on local disk under public/, so the existing static file server
+// (serveStatic, below) serves them with no extra routing needed — the
+// same way the global public/branding/ assets already are.
+const KIOSK_BRANDING_DIR = path.join(PUBLIC_DIR, 'branding', 'kiosks');
+const MAX_BRANDING_UPLOAD_BYTES = 8 * 1024 * 1024; // JSON body cap — covers base64 overhead on a ~5MB image
+const MAX_BRANDING_IMAGE_BYTES = 5 * 1024 * 1024; // decoded image size cap, per file
+const BRANDING_IMAGE_EXT_BY_MIME = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+};
+
+/** Decodes a `data:image/...;base64,...` string, validating its type and size. Throws with a message safe to show the admin. */
+function decodeBrandingImage(dataUrl, { allowSvg }) {
+  const match = /^data:(image\/[a-zA-Z0-9+.-]+);base64,([a-zA-Z0-9+/=\s]+)$/.exec(dataUrl || '');
+  if (!match) throw new Error('That doesn\'t look like an image file.');
+  const mime = match[1].toLowerCase();
+  const ext = BRANDING_IMAGE_EXT_BY_MIME[mime];
+  if (!ext || (mime === 'image/svg+xml' && !allowSvg)) {
+    throw new Error(allowSvg ? 'Use a PNG, JPEG, WEBP, or SVG image.' : 'Use a PNG, JPEG, or WEBP image.');
+  }
+  const buf = Buffer.from(match[2], 'base64');
+  if (buf.length > MAX_BRANDING_IMAGE_BYTES) throw new Error('Image is too large (max 5MB).');
+  return { buf, ext };
+}
+
+/** Deletes any existing `<baseName>.*` file in `dir` — run before writing a
+ *  fresh upload so re-uploading in a different format (e.g. png → jpg)
+ *  doesn't leave the old file behind, still being served alongside it. */
+function clearBrandingFile(dir, baseName) {
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch { return; }
+  for (const entry of entries) {
+    if (entry.startsWith(`${baseName}.`)) {
+      try { fs.unlinkSync(path.join(dir, entry)); } catch { /* ignore */ }
+    }
+  }
+}
+
 // ---- Languages -----------------------------------------------------------
 // WORLD_LANGUAGES is the full ISO 639-1 catalog (~180 languages) — every
 // language the admin dashboard *could* turn on, not what any one property
@@ -522,6 +590,16 @@ const queue = [];
 const agentConns = new Set();
 /** every live connection (guest + agent), so keepalive pings reach everyone */
 const allConns = new Set();
+// Which connection currently "owns" each kiosk account's session — keyed by
+// kiosk id, one entry per kiosk at most. This is what makes a kiosk login
+// exclusive: a second login attempt for a kiosk already in here is rejected
+// (see handleGuestConnection's 'kiosk-login' handling) rather than allowed
+// to sign in alongside the first, the way agents can today. Entries are
+// removed the moment that connection closes (clean sign-out, tab closed, or
+// the heartbeat below finally notices a dead connection) — never on a timer
+// — so a kiosk that's actually offline doesn't stay "signed in" for long.
+const kioskSessions = new Map();
+
 const callLog = [];
 /**
  * Calls that were never answered — the guest gave up waiting or lost their
@@ -1078,12 +1156,12 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (chunk) => {
       data += chunk;
-      if (data.length > 1e6) { reject(new Error('body too large')); req.destroy(); }
+      if (data.length > maxBytes) { reject(new Error('body too large')); req.destroy(); }
     });
     req.on('end', () => {
       if (!data) return resolve({});
@@ -1656,6 +1734,155 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // Kiosk accounts — same shape as the agents endpoints above, plus a
+  // `sessionActive` flag (derived from kioskSessions, never persisted) so
+  // the admin dashboard can show which kiosks are currently signed in, and
+  // a force-logout action to reclaim a session (e.g. a kiosk device that
+  // was powered off without signing out first).
+  if (urlObj.pathname === '/api/admin/kiosks' && req.method === 'GET') {
+    sendJson(res, 200, {
+      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
+    });
+    return;
+  }
+
+  if (urlObj.pathname === '/api/admin/kiosks' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'invalid JSON' }); return; }
+    const name = String(body.name || '').trim().slice(0, 60);
+    const password = String(body.password || '').trim().slice(0, 60);
+    if (!name || !password) { sendJson(res, 400, { error: 'name and password are both required' }); return; }
+    if (password.length < 4) { sendJson(res, 400, { error: 'password must be at least 4 characters' }); return; }
+    if (KIOSKS.some((k) => k.password === password)) { sendJson(res, 409, { error: 'that password is already in use' }); return; }
+    const kiosk = { id: crypto.randomUUID(), name, password };
+    KIOSKS.push(kiosk);
+    const persisted = await saveKiosks();
+    sendJson(res, 201, {
+      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
+      persisted,
+      persistenceConfigured: store.configured,
+    });
+    return;
+  }
+
+  const kioskDeleteMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)$/);
+  if (kioskDeleteMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(kioskDeleteMatch[1]);
+    const before = KIOSKS.length;
+    KIOSKS = KIOSKS.filter((k) => k.id !== id);
+    if (KIOSKS.length === before) { sendJson(res, 404, { error: 'no kiosk with that id' }); return; }
+    const activeConn = kioskSessions.get(id);
+    if (activeConn) {
+      activeConn.send({ type: 'kiosk-forced-logout', reason: 'account-removed' });
+      activeConn.close();
+      kioskSessions.delete(id);
+    }
+    // Clean up any branding images this kiosk had uploaded — nothing else
+    // references them once the account itself is gone.
+    try { fs.rmSync(path.join(KIOSK_BRANDING_DIR, id), { recursive: true, force: true }); } catch { /* non-fatal */ }
+    const persisted = await saveKiosks();
+    sendJson(res, 200, {
+      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
+      persisted,
+      persistenceConfigured: store.configured,
+    });
+    return;
+  }
+
+  // Per-kiosk branding — logo, background photo, and/or accent color
+  // overriding the global kiosk.css defaults for just this kiosk account.
+  // Accepts base64 data URLs rather than multipart form data, matching
+  // this project's zero-dependency approach (no multipart parser). Any
+  // field left out of the body is untouched; `removeLogo`/
+  // `removeBackground` clear that one override back to the global default.
+  const kioskBrandingMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)\/branding$/);
+  if (kioskBrandingMatch && req.method === 'POST') {
+    const id = decodeURIComponent(kioskBrandingMatch[1]);
+    const kiosk = KIOSKS.find((k) => k.id === id);
+    if (!kiosk) { sendJson(res, 404, { error: 'no kiosk with that id' }); return; }
+
+    let body;
+    try {
+      body = await readJsonBody(req, MAX_BRANDING_UPLOAD_BYTES);
+    } catch (err) {
+      const tooLarge = err.message === 'body too large';
+      sendJson(res, tooLarge ? 413 : 400, { error: tooLarge ? 'Upload too large (max 8MB).' : 'invalid JSON' });
+      return;
+    }
+
+    const branding = { ...(kiosk.branding || {}) };
+    const kioskDir = path.join(KIOSK_BRANDING_DIR, id);
+
+    try {
+      if (body.removeLogo) {
+        clearBrandingFile(kioskDir, 'logo');
+        delete branding.logoUrl;
+      } else if (body.logo && body.logo.dataUrl) {
+        const { buf, ext } = decodeBrandingImage(body.logo.dataUrl, { allowSvg: true });
+        fs.mkdirSync(kioskDir, { recursive: true });
+        clearBrandingFile(kioskDir, 'logo');
+        fs.writeFileSync(path.join(kioskDir, `logo${ext}`), buf);
+        branding.logoUrl = `/branding/kiosks/${id}/logo${ext}?v=${Date.now()}`;
+      }
+
+      if (body.removeBackground) {
+        clearBrandingFile(kioskDir, 'background');
+        delete branding.backgroundUrl;
+      } else if (body.background && body.background.dataUrl) {
+        const { buf, ext } = decodeBrandingImage(body.background.dataUrl, { allowSvg: false });
+        fs.mkdirSync(kioskDir, { recursive: true });
+        clearBrandingFile(kioskDir, 'background');
+        fs.writeFileSync(path.join(kioskDir, `background${ext}`), buf);
+        branding.backgroundUrl = `/branding/kiosks/${id}/background${ext}?v=${Date.now()}`;
+      }
+
+      if (body.accentColor !== undefined) {
+        const color = String(body.accentColor || '').trim();
+        if (!color) {
+          delete branding.accentColor;
+        } else if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+          sendJson(res, 400, { error: 'accentColor must be a hex color like #016FB7' });
+          return;
+        } else {
+          branding.accentColor = color;
+        }
+      }
+    } catch (err) {
+      sendJson(res, 400, { error: err.message });
+      return;
+    }
+
+    if (Object.keys(branding).length) kiosk.branding = branding;
+    else delete kiosk.branding;
+
+    const persisted = await saveKiosks();
+    // If this kiosk is currently signed in, push the updated branding to
+    // it live — otherwise an admin's change wouldn't show up until the
+    // device happens to sign out and back in.
+    const activeConn = kioskSessions.get(id);
+    if (activeConn) activeConn.send({ type: 'kiosk-branding-updated', branding: kiosk.branding || {} });
+    sendJson(res, 200, {
+      kiosks: KIOSKS.map((k) => ({ ...k, sessionActive: kioskSessions.has(k.id) })),
+      persisted,
+      persistenceConfigured: store.configured,
+    });
+    return;
+  }
+
+  const kioskForceLogoutMatch = urlObj.pathname.match(/^\/api\/admin\/kiosks\/([^/]+)\/force-logout$/);
+  if (kioskForceLogoutMatch && req.method === 'POST') {
+    const id = decodeURIComponent(kioskForceLogoutMatch[1]);
+    const kiosk = KIOSKS.find((k) => k.id === id);
+    if (!kiosk) { sendJson(res, 404, { error: 'no kiosk with that id' }); return; }
+    const activeConn = kioskSessions.get(id);
+    if (!activeConn) { sendJson(res, 200, { ok: true, wasActive: false }); return; }
+    activeConn.send({ type: 'kiosk-forced-logout', reason: 'admin' });
+    activeConn.close();
+    kioskSessions.delete(id);
+    sendJson(res, 200, { ok: true, wasActive: true });
+    return;
+  }
+
   if (urlObj.pathname === '/api/admin/config' && req.method === 'GET') {
     sendJson(res, 200, { config: CONFIG, min: MIN_HOLD_SECONDS, max: MAX_HOLD_SECONDS });
     return;
@@ -1894,18 +2121,55 @@ async function handleAdminApi(req, res, urlObj) {
 
 function handleGuestConnection(conn) {
   let myCallId = null;
+  // Set once this connection authenticates as a kiosk account (see
+  // 'kiosk-login' below) — kioskAccountId keys kioskSessions (the
+  // exclusivity lock), kioskName is the plain display string that's been
+  // going into call.kioskId all along, now sourced from the authenticated
+  // account instead of trusted at face value from the client.
+  let kioskAccountId = null;
+  let kioskName = null;
   allConns.add(conn);
 
-  conn.onMessage = (raw) => {
+  conn.onMessage = async (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+
+    if (msg.type === 'kiosk-login') {
+      const match = KIOSKS.find((k) => k.password === String(msg.password || ''));
+      if (!match) {
+        conn.send({ type: 'kiosk-login-fail', reason: 'invalid-credentials' });
+        return;
+      }
+      const existing = kioskSessions.get(match.id);
+      if (existing && existing !== conn) {
+        conn.send({ type: 'kiosk-login-fail', reason: 'already-active' });
+        return;
+      }
+      kioskAccountId = match.id;
+      kioskName = match.name;
+      conn.kioskAccountId = kioskAccountId; // readable from outside this closure, same convention as conn.agentId
+      kioskSessions.set(kioskAccountId, conn);
+      conn.send({ type: 'kiosk-login-ok', name: kioskName, branding: match.branding || {} });
+      return;
+    }
+
+    if (!kioskAccountId) return; // must sign in first — everything below is a signed-in kiosk's own connection
+
+    if (msg.type === 'kiosk-logout') {
+      if (kioskSessions.get(kioskAccountId) === conn) kioskSessions.delete(kioskAccountId);
+      if (myCallId) { endCall(myCallId, 'guest-disconnected'); myCallId = null; }
+      conn.send({ type: 'kiosk-logout-ok' });
+      kioskAccountId = null;
+      kioskName = null;
+      return;
+    }
 
     if (msg.type === 'join-queue') {
       const callId = nextCallId++;
       myCallId = callId;
       calls.set(callId, {
         topic: (msg.topic || 'General').slice(0, 60),
-        kioskId: String(msg.kioskId || '').trim().slice(0, 40) || 'Unnamed kiosk',
+        kioskId: kioskName,
         language: enabledLanguageCodes().has(msg.language) ? msg.language : DEFAULT_LANGUAGE,
         guestConn: conn,
         agentConn: null,
@@ -1945,6 +2209,11 @@ function handleGuestConnection(conn) {
 
   conn.onClose = () => {
     allConns.delete(conn);
+    // Only clear the session lock if THIS connection still holds it — a
+    // stale close firing after a newer login already replaced it (shouldn't
+    // normally happen given the exclusivity check above, but costs nothing
+    // to guard against) must not evict the new session.
+    if (kioskAccountId && kioskSessions.get(kioskAccountId) === conn) kioskSessions.delete(kioskAccountId);
     if (myCallId) endCall(myCallId, 'guest-disconnected');
   };
 }
@@ -2345,6 +2614,7 @@ async function main() {
     console.log('[agents] upgraded stored agent record(s) from the old PIN scheme to the new id/password scheme.');
     await saveAgents();
   }
+  KIOSKS = await store.loadKiosks(KIOSKS);
   ADMIN_PASSWORD = await store.loadAdminPassword(ADMIN_PASSWORD);
   CONFIG = await store.loadConfig(CONFIG);
   callLog.push(...await store.loadCallLog());
@@ -2379,7 +2649,7 @@ async function main() {
     console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
     console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
     console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
-    console.log(`  Loaded ${AGENTS.length} agent(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
+    console.log(`  Loaded ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
   });
 }
 

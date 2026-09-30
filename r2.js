@@ -238,6 +238,59 @@ async function getStorageSummary() {
 }
 
 /**
+ * Lists every object key currently in the bucket (paginating the same way
+ * getStorageSummary does). Used by the go-live cleanup script to enumerate
+ * recordings to delete — everyday server.js code never needs the full key
+ * list, only getStorageSummary's totals, so this stays a separate export
+ * rather than folding into that function's return value.
+ */
+async function listObjectKeys() {
+  assertConfigured();
+  const keys = [];
+  let continuationToken = null;
+
+  do {
+    const queryParams = { 'list-type': '2', 'max-keys': '1000' };
+    if (continuationToken) queryParams['continuation-token'] = continuationToken;
+
+    const { amzDate, dateStamp } = amzDateParts(new Date());
+    const payloadHash = sha256Hex(Buffer.alloc(0));
+    const canonicalUri = '/' + BUCKET;
+    const canonicalQueryString = Object.keys(queryParams)
+      .sort()
+      .map((k) => `${uriEncode(k, true)}=${uriEncode(queryParams[k], true)}`)
+      .join('&');
+    const canonicalHeaders = `host:${HOST}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+    const canonicalRequest = ['GET', canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+    const credentialScope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, sha256Hex(canonicalRequest)].join('\n');
+    const signature = hmac(signingKey(dateStamp), stringToSign).toString('hex');
+    const authorization = `AWS4-HMAC-SHA256 Credential=${ACCESS_KEY_ID}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    const res = await fetch(`https://${HOST}${canonicalUri}?${canonicalQueryString}`, {
+      method: 'GET',
+      headers: { 'X-Amz-Content-Sha256': payloadHash, 'X-Amz-Date': amzDate, Authorization: authorization },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`R2 list failed (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    }
+    const xml = await res.text();
+
+    for (const m of xml.matchAll(/<Key>([^<]*)<\/Key>/g)) {
+      keys.push(xmlUnescape(m[1]));
+    }
+
+    const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+    const tokenMatch = xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/);
+    continuationToken = truncated && tokenMatch ? xmlUnescape(tokenMatch[1]) : null;
+  } while (continuationToken);
+
+  return keys;
+}
+
+/**
  * Checks whether an object still exists in the bucket (HEAD, no body
  * transferred) — used to catch a recording that was deleted directly from
  * the R2 bucket (outside this app) so a stale index entry can be told apart
@@ -275,5 +328,6 @@ module.exports = {
   getPresignedUrl,
   deleteObject,
   getStorageSummary,
+  listObjectKeys,
   headObject,
 };

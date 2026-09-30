@@ -29,31 +29,90 @@ const CONNECT_TIMEOUT_MS = 15 * 1000; // if WebRTC never reaches "connected" in 
                                         // blocks direct peer-to-peer), fail loudly instead
                                         // of leaving the guest staring at a blank screen.
 
-// ---- Kiosk identity ----------------------------------------------------
-// With multiple kiosks deployed around the property, agents need to know
-// which physical kiosk a call is coming from. Each kiosk is named once
-// (via this one-time setup screen, or a `?kiosk=Name` URL for a bookmarked
-// per-device URL) and remembers that name in localStorage — not
-// sessionStorage, since a kiosk is a fixed device that should stay named
-// across reboots, not just one browser session.
-const KIOSK_ID_STORAGE_KEY = 'vfd_kiosk_id';
+// ---- Kiosk identity / login ---------------------------------------------
+// Each kiosk device signs in with its own kiosk account (name + password,
+// managed in the admin dashboard) instead of a free-text label. The server
+// enforces exactly one active session per kiosk account (see server.js's
+// kioskSessions map), so a second device signing in with the same password
+// is rejected with reason:'already-active' until the first signs out — or
+// its connection drops and the server's own heartbeat notices (typically
+// within ~20-40s).
+//
+// sessionStorage (not localStorage), matching agent.js's convention:
+// survives a page refresh but clears when the browser/tab fully closes, so
+// a kiosk that reboots has to sign in again — which also frees up the
+// session slot if the device lost power without signing out cleanly.
+const KIOSK_PASSWORD_STORAGE_KEY = 'vfd_kiosk_password';
+const KIOSK_LOGIN_TIMEOUT_MS = 20000; // Render free-tier cold starts can take ~30-60s;
+                                       // this at least turns a silent hang into a visible message.
+const KIOSK_RECONNECT_MS = 4000; // fixed interval — simpler than agent.js's exponential
+                                  // backoff, appropriate for an unattended device that
+                                  // should just keep trying until the server is back.
 
-function kioskIdFromUrl() {
-  const params = new URLSearchParams(location.search);
-  const value = params.get('kiosk') || params.get('kioskId');
-  return value ? value.trim().slice(0, 40) : null;
+let kioskName = null;
+let kioskLoginInProgress = false;
+let lastKioskLoginPassword = null;
+let kioskLoginTimeoutHandle = null;
+let kioskReconnectTimer = null;
+
+function setKioskLoginBusy(busy) {
+  const btn = document.querySelector('#kiosk-login-form button[type="submit"]');
+  if (btn) { btn.disabled = busy; btn.textContent = busy ? 'Signing in…' : 'Sign In'; }
 }
 
-let kioskId = localStorage.getItem(KIOSK_ID_STORAGE_KEY) || kioskIdFromUrl();
-if (kioskId && !localStorage.getItem(KIOSK_ID_STORAGE_KEY)) {
-  localStorage.setItem(KIOSK_ID_STORAGE_KEY, kioskId);
+function setKioskLoginMessage(text, { error = true } = {}) {
+  const el = document.getElementById('kiosk-login-error');
+  if (!text) { el.classList.add('hidden'); return; }
+  el.textContent = text;
+  el.style.color = error ? '' : 'var(--sub)';
+  el.classList.remove('hidden');
 }
 
-function setKioskId(name) {
-  kioskId = name;
-  localStorage.setItem(KIOSK_ID_STORAGE_KEY, kioskId);
-  const label = document.getElementById('kiosk-id-label');
-  if (label) label.textContent = kioskId;
+function showKioskLoginError(text) {
+  kioskLoginInProgress = false;
+  clearTimeout(kioskLoginTimeoutHandle);
+  setKioskLoginBusy(false);
+  setKioskLoginMessage(text, { error: true });
+}
+
+function scheduleKioskReconnect() {
+  clearTimeout(kioskReconnectTimer);
+  kioskReconnectTimer = setTimeout(() => {
+    kioskReconnectTimer = null;
+    const password = sessionStorage.getItem(KIOSK_PASSWORD_STORAGE_KEY);
+    if (password) loginKiosk(password, { isReconnect: true });
+  }, KIOSK_RECONNECT_MS);
+}
+
+function loginKiosk(password, { isReconnect = false } = {}) {
+  kioskLoginInProgress = true;
+  lastKioskLoginPassword = password;
+  if (!isReconnect) {
+    setKioskLoginBusy(true);
+    setKioskLoginMessage(null);
+  }
+
+  connectWS()
+    .then(() => {
+      wsSend({ type: 'kiosk-login', password });
+      clearTimeout(kioskLoginTimeoutHandle);
+      kioskLoginTimeoutHandle = setTimeout(() => {
+        if (kioskLoginInProgress) {
+          if (!isReconnect) {
+            showKioskLoginError('No response from the server after 20s. If this app was asleep it can take up to a minute to wake up — try again.');
+          }
+          try { ws.close(); } catch { /* ignore */ }
+        }
+      }, KIOSK_LOGIN_TIMEOUT_MS);
+    })
+    .catch(() => {
+      kioskLoginInProgress = false;
+      if (isReconnect) {
+        scheduleKioskReconnect();
+      } else {
+        showKioskLoginError('Could not reach the front desk. Please try again.');
+      }
+    });
 }
 
 const screens = {};
@@ -61,6 +120,60 @@ document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
 function showScreen(id) {
   Object.values(screens).forEach((el) => el.classList.remove('active'));
   screens[id].classList.add('active');
+}
+
+// ---- Per-kiosk branding --------------------------------------------------
+// Overrides the global kiosk.css look (accent color, logo, background
+// photo) for whichever kiosk account this device is signed in as — set
+// from the admin dashboard's Kiosk Accounts panel. Any field a kiosk
+// account doesn't override just falls back to the site-wide default
+// (kiosk.css's :root values and public/branding/logo.svg /
+// background.jpg), so a kiosk with no branding configured looks exactly
+// like it did before this feature existed.
+const DEFAULT_LOGO_SRC = 'branding/logo.svg';
+
+/** Darkens a #rrggbb hex color by `amount` (0-1) — used to derive --accent-2
+ *  (the pressed/hover shade) from a single admin-supplied accent color,
+ *  the same relationship the default theme's --accent/--accent-2 have. */
+function darkenHex(hex, amount = 0.18) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return hex;
+  const num = parseInt(m[1], 16);
+  const channel = (shift) => {
+    const v = Math.round(((num >> shift) & 0xff) * (1 - amount));
+    return v.toString(16).padStart(2, '0');
+  };
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
+}
+
+function applyKioskBranding(branding) {
+  branding = branding || {};
+  const root = document.documentElement.style;
+
+  if (branding.accentColor && /^#[0-9a-fA-F]{6}$/.test(branding.accentColor)) {
+    root.setProperty('--accent', branding.accentColor);
+    root.setProperty('--accent-2', darkenHex(branding.accentColor));
+  } else {
+    root.removeProperty('--accent');
+    root.removeProperty('--accent-2');
+  }
+
+  document.querySelectorAll('.brand-mark').forEach((img) => {
+    img.src = branding.logoUrl || DEFAULT_LOGO_SRC;
+  });
+
+  if (branding.backgroundUrl) {
+    // Same layered wash + fallback gradient as kiosk.css's default
+    // background-image, just with the kiosk-specific photo swapped in —
+    // an inline style here simply wins the cascade over the stylesheet
+    // rule, no !important needed.
+    document.body.style.backgroundImage =
+      `linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.96)), ` +
+      `url('${branding.backgroundUrl}'), ` +
+      `linear-gradient(160deg, #ffffff 0%, #eef4f9 100%)`;
+  } else {
+    document.body.style.backgroundImage = ''; // falls back to kiosk.css's default
+  }
 }
 
 let ws = null;
@@ -101,7 +214,12 @@ let currentAgentName = null;
 let selectedStars = 0;
 let endedResetHandle = null;
 
+let wsOpenPromise = null;
+
 function connectWS() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return wsOpenPromise;
+  }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws?role=guest`);
 
@@ -111,18 +229,39 @@ function connectWS() {
     handleServerMessage(msg);
   });
 
-  ws.addEventListener('close', () => {
-    if (screens['screen-call'].classList.contains('active') ||
-        screens['screen-waiting'].classList.contains('active')) {
-      showError('Connection lost', 'We lost the connection to the front desk. Please try again.');
-      cleanupCall();
-    }
-  });
+  ws.addEventListener('close', onWsClose);
 
-  return new Promise((resolve, reject) => {
+  wsOpenPromise = new Promise((resolve, reject) => {
     ws.addEventListener('open', resolve, { once: true });
     ws.addEventListener('error', reject, { once: true });
   });
+  return wsOpenPromise;
+}
+
+function onWsClose() {
+  const wasOnCall = screens['screen-call'].classList.contains('active') ||
+                     screens['screen-waiting'].classList.contains('active');
+  if (kioskName) {
+    // We were signed in and the connection dropped unexpectedly (network
+    // blip, server restart) rather than via an explicit sign-out. Clean up
+    // any in-progress call silently and try to resume the same kiosk
+    // session automatically, rather than stranding an unattended device on
+    // a dead-end error screen.
+    kioskName = null;
+    if (wasOnCall) cleanupCall();
+    showScreen('screen-kiosk-setup');
+    const password = sessionStorage.getItem(KIOSK_PASSWORD_STORAGE_KEY);
+    if (password) {
+      setKioskLoginMessage('Reconnecting…', { error: false });
+      setKioskLoginBusy(true);
+      loginKiosk(password, { isReconnect: true });
+    }
+    return;
+  }
+  if (wasOnCall) {
+    showError('Connection lost', 'We lost the connection to the front desk. Please try again.');
+    cleanupCall();
+  }
 }
 
 function wsSend(obj) {
@@ -131,6 +270,61 @@ function wsSend(obj) {
 
 async function handleServerMessage(msg) {
   switch (msg.type) {
+    case 'kiosk-login-ok':
+      kioskLoginInProgress = false;
+      clearTimeout(kioskLoginTimeoutHandle);
+      clearTimeout(kioskReconnectTimer);
+      kioskReconnectTimer = null;
+      setKioskLoginBusy(false);
+      setKioskLoginMessage(null);
+      kioskName = msg.name;
+      sessionStorage.setItem(KIOSK_PASSWORD_STORAGE_KEY, lastKioskLoginPassword);
+      document.getElementById('kiosk-id-label').textContent = kioskName;
+      applyKioskBranding(msg.branding);
+      showScreen('screen-idle');
+      break;
+
+    case 'kiosk-login-fail':
+      kioskLoginInProgress = false;
+      clearTimeout(kioskLoginTimeoutHandle);
+      sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
+      applyKioskBranding(null); // back to the site-wide default look
+      showScreen('screen-kiosk-setup');
+      if (msg.reason === 'already-active') {
+        showKioskLoginError('This kiosk is already signed in on another device. Sign it out there first, or ask an admin to force a sign-out.');
+      } else {
+        showKioskLoginError('Incorrect kiosk password. Try again.');
+      }
+      break;
+
+    case 'kiosk-logout-ok':
+      kioskName = null;
+      document.getElementById('kiosk-login-input').value = '';
+      setKioskLoginMessage(null);
+      applyKioskBranding(null); // back to the site-wide default look
+      showScreen('screen-kiosk-setup');
+      break;
+
+    case 'kiosk-forced-logout':
+      kioskName = null;
+      sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
+      cleanupCall();
+      applyKioskBranding(null); // back to the site-wide default look
+      showScreen('screen-kiosk-setup');
+      showKioskLoginError(
+        msg.reason === 'account-removed'
+          ? 'This kiosk account was removed by an admin. Contact your administrator.'
+          : 'This kiosk was signed out by an admin.'
+      );
+      break;
+
+    // An admin changed this kiosk's branding while it's signed in (see the
+    // admin dashboard's Kiosk Accounts panel) — applied live so a change
+    // shows up immediately rather than needing a sign-out/back-in.
+    case 'kiosk-branding-updated':
+      applyKioskBranding(msg.branding);
+      break;
+
     case 'queued':
       currentCallId = msg.callId;
       document.getElementById('waiting-title').textContent = 'Connecting you to the next available agent…';
@@ -370,12 +564,17 @@ async function requestMediaAndJoin(topic, language) {
   document.getElementById('connecting-title').textContent = 'Finding an available agent…';
   document.getElementById('connecting-sub').textContent = '';
 
-  try {
-    if (!ws || ws.readyState !== WebSocket.OPEN) await connectWS();
-    wsSend({ type: 'join-queue', topic, kioskId, language: currentLanguage });
-  } catch {
-    showError('Can’t reach the front desk', 'Please try again in a moment.');
+  if (!kioskName || !ws || ws.readyState !== WebSocket.OPEN) {
+    // The session dropped between the idle screen and tapping "Start" (a
+    // brief network blip) — onWsClose() already kicked off a relogin, but
+    // it hasn't landed yet. Sending an unauthenticated join-queue would
+    // just be ignored by the server, so send the guest back instead of
+    // leaving them stuck on the connecting screen.
+    if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+    showError('Connection lost', 'We lost the connection to the front desk. Please try again.');
+    return;
   }
+  wsSend({ type: 'join-queue', topic, language: currentLanguage });
 }
 
 function startWaitTimer() {
@@ -457,16 +656,22 @@ document.getElementById('btn-cancel-language').addEventListener('click', () => {
   showScreen('screen-idle');
 });
 
-document.getElementById('kiosk-setup-form').addEventListener('submit', (e) => {
+document.getElementById('kiosk-login-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  const value = document.getElementById('kiosk-setup-input').value.trim().slice(0, 40);
+  const value = document.getElementById('kiosk-login-input').value;
   if (!value) return;
-  setKioskId(value);
-  showScreen('screen-idle');
+  loginKiosk(value, { isReconnect: false });
 });
 
-document.getElementById('btn-change-kiosk-id').addEventListener('click', () => {
-  document.getElementById('kiosk-setup-input').value = kioskId || '';
+document.getElementById('btn-kiosk-sign-out').addEventListener('click', () => {
+  wsSend({ type: 'kiosk-logout' });
+  sessionStorage.removeItem(KIOSK_PASSWORD_STORAGE_KEY);
+  // Optimistic — the server's kiosk-logout-ok ack (handled above) lands
+  // shortly after and is a harmless no-op by then.
+  kioskName = null;
+  document.getElementById('kiosk-login-input').value = '';
+  setKioskLoginMessage(null);
+  applyKioskBranding(null); // back to the site-wide default look
   showScreen('screen-kiosk-setup');
 });
 
@@ -524,10 +729,12 @@ document.getElementById('btn-skip-rating').addEventListener('click', () => {
   finishEndedScreen();
 });
 
-if (kioskId) {
-  document.getElementById('kiosk-id-label').textContent = kioskId;
-  showScreen('screen-idle');
+showScreen('screen-kiosk-setup');
+const storedKioskPassword = sessionStorage.getItem(KIOSK_PASSWORD_STORAGE_KEY);
+if (storedKioskPassword) {
+  setKioskLoginMessage('Signing in…', { error: false });
+  setKioskLoginBusy(true);
+  loginKiosk(storedKioskPassword, { isReconnect: true });
 } else {
-  showScreen('screen-kiosk-setup');
+  connectWS().catch(() => {}); // pre-connect so signing in is instant once a password is entered
 }
-connectWS().catch(() => {}); // pre-connect so the queue join is instant

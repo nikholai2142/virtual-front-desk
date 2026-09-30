@@ -177,6 +177,22 @@
             <p id="add-agent-error" class="error hidden"></p>
           </form>
         </section>
+
+        <section class="panel panel-full">
+          <h2>Kiosk accounts</h2>
+          <p class="stats-hint">Each kiosk device signs in with one of these accounts. A kiosk account can only have one active session at a time — signing in on a new device while another is still signed in is rejected until the first signs out (or you force one out below).</p>
+          <div id="kiosks-list" class="agents-list"></div>
+
+          <form id="add-kiosk-form" class="add-agent-form">
+            <h3>Add kiosk</h3>
+            <div class="add-agent-row">
+              <input id="new-kiosk-name" type="text" placeholder="Name (e.g. Lobby)" maxlength="60" />
+              <input id="new-kiosk-password" type="text" placeholder="Password" maxlength="60" />
+              <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+            <p id="add-kiosk-error" class="error hidden"></p>
+          </form>
+        </section>
       </div>
 
       <!-- CONFIGURATION -->
@@ -259,6 +275,52 @@
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>
+  </div>
+
+  <!-- KIOSK BRANDING -->
+  <div id="kiosk-branding-modal" class="modal-overlay hidden">
+    <div class="modal-card kiosk-branding-card">
+      <h2>Branding — <span id="kiosk-branding-name">—</span></h2>
+      <p class="sub">Override the kiosk look for just this device. Leave a field at its default to use the site-wide look.</p>
+
+      <div class="modal-field">
+        <label for="kb-accent-hex">Accent color</label>
+        <div class="branding-color-row">
+          <input type="color" id="kb-accent-picker" value="#016fb7" />
+          <input type="text" id="kb-accent-hex" placeholder="Default (#016FB7)" maxlength="7" />
+          <button type="button" id="kb-accent-clear" class="link-btn-small">Use default</button>
+        </div>
+      </div>
+
+      <div class="modal-field">
+        <label>Logo</label>
+        <div class="branding-upload-row">
+          <img id="kb-logo-preview" class="branding-preview" src="branding/logo.svg" alt="" />
+          <div class="branding-upload-controls">
+            <input type="file" id="kb-logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+            <button type="button" id="kb-logo-clear" class="link-btn-small">Remove custom logo</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-field">
+        <label>Background photo</label>
+        <div class="branding-upload-row">
+          <img id="kb-background-preview" class="branding-preview branding-preview-wide hidden" alt="" />
+          <div class="branding-upload-controls">
+            <input type="file" id="kb-background-file" accept="image/png,image/jpeg,image/webp" />
+            <button type="button" id="kb-background-clear" class="link-btn-small">Remove custom background</button>
+          </div>
+        </div>
+      </div>
+
+      <p id="kiosk-branding-error" class="error hidden"></p>
+      <p id="kiosk-branding-success" class="hint hidden"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-close-kiosk-branding" class="btn btn-secondary">Close</button>
+        <button type="button" id="btn-save-kiosk-branding" class="btn btn-primary">Save</button>
+      </div>
+    </div>
   </div>
 
   <script src="admin.js"></script>

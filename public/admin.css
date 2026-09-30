@@ -341,3 +341,29 @@ html, body {
 .modal-actions .btn { width: auto; flex: 1; }
 .btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
 .hint { color: var(--good); font-size: 13px; margin-top: 12px; }
+
+/* Kiosk branding modal (wider than the plain password modal — it holds
+   color pickers and image previews, not just text fields) */
+.kiosk-branding-card { max-width: 420px; }
+.link-btn-small {
+  background: transparent; border: none; color: var(--accent); font-size: 12px;
+  text-decoration: underline; cursor: pointer; padding: 0; white-space: nowrap;
+}
+.branding-color-row { display: flex; align-items: center; gap: 8px; }
+.branding-color-row input[type="color"] {
+  width: 36px; height: 36px; padding: 2px; border-radius: 8px; border: 1px solid var(--border);
+  background: #0e1526; cursor: pointer; flex: 0 0 auto;
+}
+.branding-color-row input[type="text"] { flex: 1 1 auto; min-width: 0; }
+.branding-upload-row { display: flex; align-items: center; gap: 12px; }
+.branding-upload-controls { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.branding-upload-controls input[type="file"] { font-size: 12px; color: var(--sub); max-width: 100%; }
+.branding-preview {
+  width: 48px; height: 48px; object-fit: contain; border-radius: 8px;
+  border: 1px solid var(--border); background: #0e1526; flex: 0 0 auto;
+}
+.branding-preview-wide { width: 84px; height: 48px; object-fit: cover; }
+.branding-swatch {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 5px; vertical-align: middle; border: 1px solid rgba(255,255,255,0.4);
+}

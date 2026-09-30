@@ -14,7 +14,7 @@ Three screens, one server:
   queue, take calls, and (optionally) handle WhatsApp/Facebook Messenger
   chats from guests.
 - **Admin Dashboard** (`/admin`) — where a manager adds/removes agents and
-  checks each agent's call performance.
+  kiosk accounts, and checks each agent's call performance.
 
 Zero npm dependencies. The signaling server is plain Node (built-in `http`
 module, plus a small hand-rolled WebSocket implementation), and everything
@@ -58,20 +58,39 @@ beyond this repo.
 Every call now comes from "Front Desk" (the only department — see
 "What changed" below), so with several kiosks around the property, the
 kiosk's **name** is what tells agents apart, not a department. Each kiosk
-names itself once:
+device signs in with its own **kiosk account** (name + password), managed
+from the admin dashboard's [User Management](#user-management) page —
+the same way agent accounts are managed:
 
-- **First launch**: opening `/` on a kiosk that's never been set up shows a
-  one-time "Set up this kiosk" screen — type a name (e.g. "Lobby", "Pool
-  Deck", "Level 2 Elevator Bank") and save. That name is remembered on that
-  device (`localStorage`) for every call afterwards, across restarts and
-  browser refreshes.
-- **Bookmarked URL** (handy when provisioning several tablets at once):
-  open `/?kiosk=Lobby` (URL-encode spaces, e.g. `/?kiosk=Pool%20Deck`) and
-  that name is saved automatically — no on-screen setup needed. Bookmark a
-  different URL per device.
-- **Renaming a kiosk** (e.g. it's physically moved): tap the small "change"
-  link at the bottom of the kiosk's idle screen to reopen the naming
-  screen.
+- **Signing a kiosk in**: opening `/` on a device that isn't signed in
+  shows a "Kiosk Sign-in" screen — enter that kiosk's password. On
+  success the device is remembered for every call afterwards, across
+  browser refreshes (`sessionStorage`, so it clears if the browser/tab is
+  fully closed and needs signing in again on restart — see "Single
+  session per kiosk" below for why that's the deliberate behavior).
+- **One active session per kiosk account**: a kiosk account can only be
+  signed in on one device at a time. If a second device tries to sign in
+  with the same password while the first is still active, it's rejected
+  with a clear "this kiosk is already signed in on another device"
+  message — it does not silently boot the first device. Sign the first
+  one out (or use the admin dashboard's **Force sign out**, below) to
+  free the slot.
+- **Signing out**: tap "Sign out" at the bottom of the kiosk's idle
+  screen. This also happens automatically, on the server's side, within
+  about 20-40 seconds if a signed-in device loses power or network
+  entirely without signing out cleanly (the same heartbeat that detects a
+  dropped agent or guest connection — see "How it works" above) — so a
+  kiosk that's unplugged doesn't leave its account permanently locked out.
+- **Managing kiosk accounts**: add, remove, or force-sign-out a kiosk
+  account from the admin dashboard's User Management page → **Kiosk
+  accounts** panel, the same way agent accounts are managed. Removing an
+  account that's currently signed in immediately signs that device out.
+- **Renaming a kiosk** (e.g. it's physically moved): there's no separate
+  rename — just edit the kiosk's name where its account is managed, or
+  remove and re-add it.
+- **Giving a kiosk its own look**: each kiosk account can optionally
+  override the accent color, logo, and background photo — see "Per-kiosk
+  branding" under "Customizing the kiosk's branding" below.
 
 The kiosk's name travels with every call it starts — agents see it next to
 each waiting call in the queue and in the active-call header (e.g. "Front
@@ -111,8 +130,15 @@ Demo agent passwords (edit `agents.json` to change, or add more agents):
 | alex1234 | Alex |
 | sam5678  | Sam  |
 
-Open `/agent` in one browser tab/device and `/` in another to try the
-whole flow yourself.
+Demo kiosk account (edit `kiosks.json` to change, or add more from the
+admin dashboard's User Management page — see "Multiple kiosks" above):
+
+| Password  | Name  |
+|-----------|-------|
+| lobby1234 | Lobby |
+
+Open `/agent` in one browser tab/device and `/` in another (signing in
+with the kiosk password above) to try the whole flow yourself.
 
 ## Video call relay (TURN)
 
@@ -635,6 +661,25 @@ else:
 - **Handle password reset requests** — see "Password resets" below. A red
   badge on the User Management tab itself, not just inside the page, shows
   when one is waiting so it's hard to miss even from another page.
+- **Kiosk accounts** — a separate panel below Agents for managing the
+  login each physical kiosk device signs in with:
+  - **Add a kiosk** — enter a name (e.g. "Lobby", "Pool Deck") and a
+    password (at least 4 characters); it's usable at `/` right away.
+  - **Remove a kiosk** — click "Remove" on its row (asks for confirmation
+    first). If that account is currently signed in on a device, that
+    device is immediately signed out.
+  - **Signed in / Not signed in** — a live status chip on each row shows
+    whether that kiosk account currently has an active device session
+    (see "Single session per kiosk" under "Multiple kiosks" above).
+  - **Force sign out** — enabled only when a kiosk is signed in; use it to
+    reclaim a session slot without waiting for the ~20-40s automatic
+    cleanup (e.g. a tablet that was powered off without signing out
+    cleanly, or to hand the same password to a replacement device right
+    away).
+  - **Branding…** — override the accent color, logo, and/or background
+    photo for just this one kiosk; a "Custom branding" badge shows on any
+    kiosk that has an override set. See "Per-kiosk branding" under
+    "Customizing the kiosk's branding" below.
 
 ### Configuration
 
@@ -936,6 +981,53 @@ in a real lobby:
   no auto-lock/timeout if a guest walks away mid-flow beyond the call
   itself ending.
 
+## Clearing test data before go-live
+
+Once you've finished testing (placing calls, trying transfers, rating
+calls), you'll want a clean slate before real guests start using it —
+otherwise your first "real" call history is mixed in with test entries, and
+your recordings folder/bucket has test footage in it.
+
+`clear-test-data.js` (in the project root) does this in one step. It wipes:
+
+- Call history and missed calls
+- WhatsApp/Messenger chat conversations
+- Guest ratings
+- Recordings — both the R2 bucket (if configured) and local disk
+
+It deliberately leaves alone your **agent roster, kiosk accounts, admin
+password, and app config** (max hold time, enabled languages) — those are
+real setup, not test data.
+
+Run it with the same environment variables your deployed service uses
+(`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`, and the `R2_*` vars if
+you're using R2) — either from Render's **Shell** tab on the service itself
+(those vars are already set there), or locally with them exported in your
+shell:
+
+```
+node clear-test-data.js            # dry run — shows what's there, deletes nothing
+node clear-test-data.js --yes      # actually deletes it
+```
+
+**Then restart or redeploy the service.** This script only clears what's
+*persisted* (Redis + R2/local disk) — a running service is still holding
+its own in-memory copy of that same data (normal; see "Persistent storage"
+above) and will keep serving it until it restarts. Run the script, then
+restart, in that order.
+
+If you're not using Upstash/R2 at all (relying on the in-memory-only
+fallback), you don't need the script — just restart the service and
+everything test-related is gone, since none of it was ever persisted.
+
+A note on **logs**: this only clears the app's own data stores, not your
+hosting platform's console/request logs (e.g. Render's Logs tab). Those can
+contain guest phone numbers, chat messages, or names from your testing.
+Render logs roll off on their own (retention depends on your plan), but if
+you want them gone sooner, check Render's log retention/export settings —
+there's no in-app control for this since it's platform-level, not something
+this server generates a persistent file for.
+
 ## Project layout
 
 ```
@@ -946,13 +1038,15 @@ virtual-front-desk/
 ├── turn.js         Cloudflare TURN: mints short-lived WebRTC relay credentials per call
 ├── r2.js           Cloudflare R2: signs S3-compatible requests to upload/serve/list call recordings
 ├── agents.json     Seed/fallback agent passwords/names — real source of truth is Redis once configured
+├── kiosks.json     Seed/fallback kiosk account passwords/names — real source of truth is Redis once configured
 ├── admin.json      Admin dashboard password (default "letmein" — change this)
 ├── config.json     Seed/fallback video call configuration (currently: max hold duration)
 ├── recordings/     Call recordings (.webm) + index.json — local staging always, final home unless R2 is configured (see "Call recordings")
 ├── package.json
 └── public/
     ├── kiosk.html / kiosk.css / kiosk.js   Guest-facing lobby screen
-    ├── branding/                           Kiosk logo/icon/background — see "Customizing the kiosk's branding"
+    ├── branding/                           Site-wide kiosk logo/icon/background — see "Customizing the kiosk's branding"
+    │   └── kiosks/<id>/                    Per-kiosk branding overrides, uploaded from the admin dashboard (created on demand)
     ├── agent.html / agent.css / agent.js   Agent dashboard (calls + WhatsApp/Messenger chats)
     └── admin.html / admin.css / admin.js   Admin dashboard (Dashboard, Agent Performance, User Management, Configuration)
 ```
@@ -977,6 +1071,15 @@ virtual-front-desk/
 
 ### Customizing the kiosk's branding
 
+There are two layers of branding, applied in order: a **site-wide
+default** (files in `public/branding/`, used by every kiosk that doesn't
+override it) and an optional **per-kiosk override** (set from the admin
+dashboard, applies only to that one kiosk account — see "Per-kiosk
+branding" below). Neither touches the agent or admin dashboards — this is
+the guest-facing kiosk screen only.
+
+#### Site-wide default
+
 The kiosk's logo, its Start Video Call button icon, and its background all
 come from three files under `public/branding/`, ready to swap out without
 touching any HTML or CSS:
@@ -985,7 +1088,7 @@ touching any HTML or CSS:
 |---|---|---|---|
 | Logo (shown on the setup and idle screens) | `public/branding/logo.svg` | SVG | a simple bell mark |
 | Start-button icon | `public/branding/start-icon.svg` | SVG | a simple suitcase |
-| Background (setup, idle, waiting, ended, error screens) | `public/branding/background.jpg` | JPG or PNG | none — a dark gradient is used instead |
+| Background (setup, idle, waiting, ended, error screens) | `public/branding/background.jpg` | JPG or PNG | none — a plain white/light-blue gradient is used instead |
 
 **To use your own logo or icon:** replace `logo.svg` / `start-icon.svg`
 with your own SVG file of the same name (any image editor or "export as
@@ -997,12 +1100,38 @@ at your filename instead.
 
 **To use your own background photo:** just add a file named
 `public/branding/background.jpg` (landscape, at least 1920×1080 works
-well) — no code changes needed. It's automatically detected and used with
-a dark gradient over it so on-screen text stays readable regardless of how
-bright the photo is. Using a `.png` instead of `.jpg`? Change the one
+well) — no code changes needed. It's automatically detected and shown
+under a near-white wash so on-screen text stays readable regardless of how
+busy the photo is. Using a `.png` instead of `.jpg`? Change the one
 `url('branding/background.jpg')` line near the top of `public/kiosk.css`
 to match. Leave the file out entirely and the kiosk falls back to a plain
-dark gradient — never a broken image.
+light gradient — never a broken image.
 
-None of this touches the agent or admin dashboards — this is the
-guest-facing kiosk screen only.
+#### Per-kiosk branding
+
+Since each kiosk device now signs in with its own [kiosk
+account](#multiple-kiosks), a single kiosk account can override the
+site-wide default above — handy for a resort with visually distinct
+zones (e.g. a beach-themed Pool Deck kiosk vs. the main Lobby's look), or
+for white-labeling a specific kiosk for a co-branded partner area.
+
+Set it from the admin dashboard: **User Management → Kiosk accounts →
+"Branding…"** on that kiosk's row. Three independent overrides, all
+optional — leave any of them unset and that piece falls back to the
+site-wide default:
+
+- **Accent color** — replaces the button/highlight color (`#016FB7` by
+  default) for just this kiosk. A slightly darker shade for pressed/hover
+  states is derived from it automatically.
+- **Logo** — PNG, JPEG, WEBP, or SVG, up to 5MB.
+- **Background photo** — PNG, JPEG, or WEBP, up to 5MB.
+
+Uploaded images are stored under
+`public/branding/kiosks/<kiosk-account-id>/` and served by the same
+static file server as the rest of `public/` — no separate object storage
+needed for this (unlike call recordings, which can optionally go to R2).
+Removing a kiosk account also deletes its uploaded branding files.
+
+Branding applies the moment a kiosk device signs in, and updates live
+(no sign-out needed) if you change it from the admin dashboard while that
+kiosk is already signed in.

@@ -3,21 +3,25 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Virtual Front Desk - Grand Ion Delemen Hotel</title>
+<title>Front Desk — Video Call</title>
 <link rel="stylesheet" href="kiosk.css" />
 </head>
 <body>
 
-  <!-- KIOSK SETUP: shown once per device until it's given a name -->
+  <!-- KIOSK LOGIN: shown until this device is signed in with a kiosk
+       account. Each kiosk account can only have one active session — see
+       kiosk.js's handling of the 'kiosk-login-fail' reason:'already-active'
+       response. -->
   <section id="screen-kiosk-setup" class="screen">
-    <form id="kiosk-setup-form" class="center-card">
+    <form id="kiosk-login-form" class="center-card">
       <!-- Your logo — replace public/branding/logo.svg with your own (see
            README's "Customizing the kiosk's branding" section) -->
-      <img class="brand-mark" src="branding/logo.png" alt="" />
-      <h2>Set up this kiosk</h2>
-      <p class="sub">Give this kiosk a name (e.g. "Lobby" or "Pool Deck") so agents know where each call is coming from.</p>
-      <input id="kiosk-setup-input" type="text" placeholder="Kiosk name" maxlength="40" autocomplete="off" />
-      <button type="submit" class="btn btn-primary">Save</button>
+      <img class="brand-mark" src="branding/logo.svg" alt="" />
+      <h2>Kiosk Sign-in</h2>
+      <p class="sub">Enter this kiosk's password to sign in.</p>
+      <input id="kiosk-login-input" type="password" placeholder="Kiosk password" maxlength="60" autocomplete="current-password" />
+      <button type="submit" class="btn btn-primary">Sign In</button>
+      <p id="kiosk-login-error" class="error hidden"></p>
     </form>
   </section>
 
@@ -26,7 +30,7 @@
     <div class="brand">
       <!-- Your logo — replace public/branding/logo.svg with your own (see
            README's "Customizing the kiosk's branding" section) -->
-      <img class="brand-mark" src="branding/logo.png" alt="" />
+      <img class="brand-mark" src="branding/logo.svg" alt="" />
       <h1>Need help?</h1>
       <p class="sub">Tap below to start a video call with our Front Desk team.</p>
     </div>
@@ -35,7 +39,7 @@
       <img class="dept-icon" src="branding/start-icon.svg" alt="" /><span>Start Video Call</span>
     </button>
     <p class="footnote">Prefer to call? Dial <strong>0</strong> from your room phone.<br />
-      <span class="kiosk-id-footnote">Kiosk: <span id="kiosk-id-label"></span> · <button type="button" id="btn-change-kiosk-id" class="link-btn-inline">change</button></span>
+      <span class="kiosk-id-footnote">Kiosk: <span id="kiosk-id-label"></span> · <button type="button" id="btn-kiosk-sign-out" class="link-btn-inline">Sign out</button></span>
     </p>
   </section>
 

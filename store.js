@@ -26,6 +26,7 @@ const REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const configured = Boolean(REST_URL && REST_TOKEN);
 
 const AGENTS_KEY = 'vfd:agents';
+const KIOSKS_KEY = 'vfd:kiosks';
 const ADMIN_PASSWORD_KEY = 'vfd:admin:password';
 const CALL_LOG_KEY = 'vfd:calllog';
 // A safety net, not a real limit — this is roughly 135 years of calls at
@@ -113,6 +114,47 @@ async function persistAgents(agents) {
   } catch (err) {
     connected = false;
     console.error('[store] could not save the agent list to Redis — this change may be lost on the next restart/redeploy:', err.message);
+    return false;
+  }
+}
+
+// ---- Kiosk accounts --------------------------------------------------------
+// Same idea as the agent list above: Redis is the durable copy when
+// configured, a local kiosks.json is the seed/fallback otherwise. Each kiosk
+// device signs in with one of these (name + password) so only one device at
+// a time can be signed in as a given kiosk — see server.js's kioskSessions.
+
+/**
+ * Loads the kiosk account list from Redis. On a brand-new Redis database
+ * (first deploy) there's nothing there yet, so it seeds Redis from
+ * `fallbackKiosks` (the local kiosks.json) and returns that. If Redis isn't
+ * configured or isn't reachable, just returns `fallbackKiosks` unchanged.
+ */
+async function loadKiosks(fallbackKiosks) {
+  if (!configured) return fallbackKiosks;
+  try {
+    const raw = await redisCommand(['GET', KIOSKS_KEY]);
+    connected = true;
+    if (raw) return JSON.parse(raw);
+    await redisCommand(['SET', KIOSKS_KEY, JSON.stringify(fallbackKiosks)]);
+    return fallbackKiosks;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load kiosk accounts from Redis, starting from the local file instead:', err.message);
+    return fallbackKiosks;
+  }
+}
+
+/** Returns true if the kiosk account list was actually saved to Redis, false otherwise (including "not configured"). */
+async function persistKiosks(kiosks) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['SET', KIOSKS_KEY, JSON.stringify(kiosks)]);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save the kiosk account list to Redis — this change may be lost on the next restart/redeploy:', err.message);
     return false;
   }
 }
@@ -367,12 +409,74 @@ async function persistRating(rating) {
   }
 }
 
+/**
+ * Read-only counts of what clearTestData() would delete — lets the cleanup
+ * script show real numbers on a dry run without touching anything.
+ */
+async function peekTestData() {
+  const counts = { callLog: 0, missedCalls: 0, chats: 0, ratings: 0 };
+  if (!configured) return { ...counts, configured: false };
+  try {
+    counts.callLog = (await redisCommand(['LLEN', CALL_LOG_KEY])) || 0;
+    counts.missedCalls = (await redisCommand(['LLEN', MISSED_CALL_LOG_KEY])) || 0;
+    counts.chats = ((await redisCommand(['SMEMBERS', CHAT_IDS_KEY])) || []).length;
+    counts.ratings = ((await redisCommand(['SMEMBERS', RATING_IDS_KEY])) || []).length;
+    connected = true;
+    return { ...counts, configured: true };
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not read test-data counts from Redis:', err.message);
+    return { ...counts, configured: true, error: err.message };
+  }
+}
+
+// ---- Test-data cleanup (go-live prep) --------------------------------------
+// Deletes everything a guest/agent generated during testing — call history,
+// missed calls, chat conversations, ratings — while leaving the agent
+// roster, admin password, and app config (max hold time, enabled languages)
+// untouched, since those are real setup you want to keep. Recordings live in
+// R2/local disk, not Redis, so this doesn't touch them — see
+// clear-test-data.js, which calls this alongside the recordings cleanup.
+// Returns how many of each it found, whether or not it actually deleted
+// them (configured: false / not reachable still reports accurate counts as
+// zero, same "never throws" convention as the rest of this file).
+async function clearTestData() {
+  const counts = { callLog: 0, missedCalls: 0, chats: 0, ratings: 0 };
+  if (!configured) return { ...counts, configured: false };
+  try {
+    counts.callLog = (await redisCommand(['LLEN', CALL_LOG_KEY])) || 0;
+    counts.missedCalls = (await redisCommand(['LLEN', MISSED_CALL_LOG_KEY])) || 0;
+    const chatIds = (await redisCommand(['SMEMBERS', CHAT_IDS_KEY])) || [];
+    const ratingIds = (await redisCommand(['SMEMBERS', RATING_IDS_KEY])) || [];
+    counts.chats = chatIds.length;
+    counts.ratings = ratingIds.length;
+
+    await redisCommand(['DEL', CALL_LOG_KEY]);
+    await redisCommand(['DEL', MISSED_CALL_LOG_KEY]);
+    for (const id of chatIds) await redisCommand(['DEL', chatKey(id)]);
+    await redisCommand(['DEL', CHAT_IDS_KEY]);
+    for (const id of ratingIds) await redisCommand(['DEL', ratingKey(id)]);
+    await redisCommand(['DEL', RATING_IDS_KEY]);
+
+    connected = true;
+    return { ...counts, configured: true };
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not clear test data from Redis:', err.message);
+    return { ...counts, configured: true, error: err.message };
+  }
+}
+
 module.exports = {
   configured,
   checkConnection,
   getStatus,
+  peekTestData,
+  clearTestData,
   loadAgents,
   persistAgents,
+  loadKiosks,
+  persistKiosks,
   loadAdminPassword,
   persistAdminPassword,
   loadCallLog,
