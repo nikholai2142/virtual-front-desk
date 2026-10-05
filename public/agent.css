@@ -53,6 +53,17 @@ html, body {
 }
 .icon-btn:hover { background: var(--panel-2); }
 
+/* Call audio output picker (topbar) — only unhidden by agent.js in browsers
+   that support HTMLMediaElement.setSinkId. See agent.html's comment on
+   #audio-output-select and agent.js's applyAudioOutput(). */
+.audio-output-select {
+  background: transparent; border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; height: 32px; padding: 0 8px; font-size: 12px; cursor: pointer;
+  max-width: 140px; flex-shrink: 0;
+}
+.audio-output-select:hover { background: var(--panel-2); }
+.audio-output-select option { background: var(--panel); color: var(--text); }
+
 /* Modal (change password) */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(4,8,16,0.65);
@@ -296,6 +307,83 @@ html, body {
 .thread-reply-form button { width: auto; flex-shrink: 0; padding: 12px 20px; }
 #thread-send-error { margin: 8px 0 0; }
 
+/* ---- Incoming call — floating toast ----
+   Fixed to the viewport (not the .layout grid) so it shows above whichever
+   tab is active — the Calls sidebar is invisible from the Chats tab, and
+   even on the Calls tab a new queue-item card at the bottom of a long list
+   is easy to miss. Visibility is driven from agent.js's
+   updateIncomingToast(), the same trigger points as the ring tone. */
+.incoming-toast {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  width: min(420px, calc(100vw - 32px));
+  background: linear-gradient(135deg, #1a2748, #16213a);
+  border: 2px solid var(--accent);
+  border-radius: 16px;
+  padding: 16px 18px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
+  animation: ict-slide-in 0.35s ease, ict-glow-pulse 1.8s ease-in-out infinite;
+}
+.incoming-toast-icon { font-size: 28px; line-height: 1; animation: ict-ring 1.8s ease-in-out infinite; flex-shrink: 0; }
+.incoming-toast-body { flex: 1; min-width: 180px; }
+.incoming-toast-title {
+  color: var(--accent); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;
+}
+.incoming-toast-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 17px; }
+.incoming-toast-meta strong { font-weight: 700; }
+.incoming-toast .qi-lang {
+  color: var(--sub); font-size: 11px; font-weight: 600;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+}
+.incoming-toast-sub { color: var(--sub); font-size: 12px; margin-top: 3px; }
+.incoming-toast .qi-transfer-note { color: #f6c76a; font-size: 12px; margin: 4px 0 0; }
+.incoming-toast-more { color: var(--sub); font-size: 11px; font-style: italic; margin-top: 4px; }
+.incoming-toast-actions { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.incoming-toast-answer {
+  background: var(--good); color: #06210f; border: none; border-radius: 10px;
+  padding: 10px 20px; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.incoming-toast-answer:hover { filter: brightness(1.08); }
+.incoming-toast-dismiss {
+  background: transparent; border: 1px solid var(--border); color: var(--sub);
+  border-radius: 50%; width: 26px; height: 26px; align-self: center;
+  cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center;
+}
+.incoming-toast-dismiss:hover { background: var(--panel-2); color: var(--text); }
+
+@keyframes ict-slide-in {
+  from { opacity: 0; transform: translate(-50%, -18px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes ict-glow-pulse {
+  0%, 100% { box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55), 0 0 0 0 rgba(47, 111, 237, 0.55); }
+  50% { box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55), 0 0 0 9px rgba(47, 111, 237, 0); }
+}
+@keyframes ict-ring {
+  0%, 100% { transform: rotate(0deg); }
+  10% { transform: rotate(-18deg); }
+  20% { transform: rotate(14deg); }
+  30% { transform: rotate(-10deg); }
+  40% { transform: rotate(7deg); }
+  50% { transform: rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .incoming-toast, .incoming-toast-icon { animation: none; }
+}
+
+@media (max-width: 480px) {
+  .incoming-toast { top: 62px; padding: 14px; }
+  .incoming-toast-meta { font-size: 15px; }
+}
+
 /* ============================================================
    Responsive — tablet & phone
    ============================================================ */
@@ -308,6 +396,7 @@ html, body {
   .topbar-right { gap: 6px; font-size: 12px; }
   .btn-small { padding: 6px 10px; font-size: 12px; }
   .icon-btn { width: 30px; height: 30px; }
+  .audio-output-select { max-width: 90px; height: 30px; }
 
   /* Stack the sidebar above the main panel instead of a fixed 320px column,
      which is what squeezed the video call area down to a sliver on phones. */

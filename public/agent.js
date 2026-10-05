@@ -115,6 +115,75 @@ function beep() {
   } catch { /* ignore */ }
 }
 
+// ---- Call audio output device ------------------------------------------
+// By default the BROWSER decides which physical output plays what — and on
+// some OSes/browsers that's not one consistent choice: there's often a
+// separate "default communications device" used for call audio from a plain
+// "default device" used for ordinary page audio, so with both a speaker and
+// a USB headset plugged in, the ring tone can come out of one while the
+// call's audio comes out of the other. There's no way to ask the platform
+// which default it'll pick for which; the only reliable fix is to stop
+// relying on either default and explicitly pin BOTH to the SAME
+// agent-chosen device, via HTMLMediaElement.setSinkId() — supported in
+// Chrome/Edge/Firefox, not in Safari (no setSinkId at all), hence the
+// feature-detect and the topbar picker staying hidden where it's not
+// supported rather than offering something that can't work.
+const SINK_ID_SUPPORTED = typeof HTMLMediaElement !== 'undefined' && typeof HTMLMediaElement.prototype.setSinkId === 'function';
+const AUDIO_OUTPUT_STORAGE_KEY = 'vfd_audio_output_device';
+let selectedAudioOutputId = localStorage.getItem(AUDIO_OUTPUT_STORAGE_KEY) || ''; // '' = system default
+
+/** Applies the chosen output device to every element sound actually comes out of: the call's remote video/audio element, and the ring tone's audio sink (see playRingPulse below). Safe to call even where unsupported (no-op) or before either element has anything playing yet — each target is tried independently so one failing (e.g. a device that's since been unplugged) doesn't block the other. */
+async function applyAudioOutput(deviceId) {
+  if (!SINK_ID_SUPPORTED) return;
+  for (const id of ['remote-video', 'ring-audio-sink']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    try {
+      await el.setSinkId(deviceId);
+    } catch (err) {
+      console.warn(`Could not set audio output on #${id}:`, err.message);
+    }
+  }
+}
+
+/** Fills the topbar's output-device dropdown from whatever audio outputs the browser can currently see. Device labels stay blank ("Speaker 1", "Speaker 2", …) until this page has been granted a media permission at least once — answering a call does that — same limitation the browser itself has. */
+async function populateAudioOutputSelect() {
+  const select = document.getElementById('audio-output-select');
+  if (!select || !SINK_ID_SUPPORTED || !navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const outputs = devices.filter((d) => d.kind === 'audiooutput');
+    select.innerHTML = '<option value="">System default</option>';
+    outputs.forEach((d, i) => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Speaker ${i + 1}`;
+      select.appendChild(opt);
+    });
+    // The previously-picked device may have been unplugged since — fall back
+    // to default rather than keep pointing setSinkId at a device that's gone.
+    if (selectedAudioOutputId && !outputs.some((d) => d.deviceId === selectedAudioOutputId)) {
+      selectedAudioOutputId = '';
+      localStorage.removeItem(AUDIO_OUTPUT_STORAGE_KEY);
+    }
+    select.value = selectedAudioOutputId;
+  } catch (err) {
+    console.warn('Could not list audio output devices:', err.message);
+  }
+}
+
+if (SINK_ID_SUPPORTED) {
+  document.getElementById('audio-output-select').classList.remove('hidden');
+  populateAudioOutputSelect();
+  navigator.mediaDevices.addEventListener?.('devicechange', populateAudioOutputSelect);
+}
+
+document.getElementById('audio-output-select')?.addEventListener('change', (e) => {
+  selectedAudioOutputId = e.target.value;
+  localStorage.setItem(AUDIO_OUTPUT_STORAGE_KEY, selectedAudioOutputId);
+  applyAudioOutput(selectedAudioOutputId);
+});
+
 // ---- Incoming-call ring tone ---------------------------------------------
 // A single beep() on a new queue arrival is easy to miss if the agent isn't
 // looking at the screen. This plays a repeating two-pulse "ring…ring…" tone
@@ -124,14 +193,27 @@ function beep() {
 const RING_MUTED_STORAGE_KEY = 'vfd_ring_muted';
 let ringMuted = localStorage.getItem(RING_MUTED_STORAGE_KEY) === '1';
 let ringAudioCtx = null;
+let ringAudioDestination = null; // a MediaStreamAudioDestinationNode — the oscillators below render into this instead of ctx.destination, so the result is a MediaStream that #ring-audio-sink (and therefore setSinkId/applyAudioOutput) can actually control. Plain AudioContext.destination output can't be routed to a specific device this way.
 let ringIntervalHandle = null;
 let ringActive = false;
 let lastQueueLength = 0;
 
+/** Lazily builds the ring tone's audio graph and wires it into #ring-audio-sink — done once (not per-pulse) since recreating a MediaStreamDestination and restarting the sink element on every pulse would needlessly interrupt it. */
+function ensureRingAudioGraph() {
+  if (!ringAudioCtx) ringAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!ringAudioDestination) {
+    ringAudioDestination = ringAudioCtx.createMediaStreamDestination();
+    const sinkEl = document.getElementById('ring-audio-sink');
+    sinkEl.srcObject = ringAudioDestination.stream;
+    sinkEl.play().catch(() => {}); // browsers that need a user gesture first will already have one by now (the agent had to click Sign In)
+    applyAudioOutput(selectedAudioOutputId); // route it to the agent's chosen device, if any, from the very first ring
+  }
+  return ringAudioCtx;
+}
+
 function playRingPulse() {
   try {
-    if (!ringAudioCtx) ringAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const ctx = ringAudioCtx;
+    const ctx = ensureRingAudioGraph();
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     const now = ctx.currentTime;
     // Two short tones back-to-back, like a phone bell's double ring.
@@ -143,7 +225,7 @@ function playRingPulse() {
       gain.gain.setValueAtTime(0.0001, now + offset);
       gain.gain.linearRampToValueAtTime(0.16, now + offset + 0.02);
       gain.gain.linearRampToValueAtTime(0.0001, now + offset + 0.22);
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(ringAudioDestination);
       osc.start(now + offset);
       osc.stop(now + offset + 0.24);
     });
@@ -170,6 +252,65 @@ function updateRingingState() {
   } else {
     stopRinging();
   }
+}
+
+// ---- Incoming-call floating toast ------------------------------------
+// The ring tone alone is easy to miss if it's muted (shared front desk,
+// a meeting) or the agent just isn't near a speaker, and the sidebar
+// queue list isn't even visible from the Chats tab. This is a
+// fixed-position, animated card that shows the longest-waiting call
+// (queue[0] — the server and the sidebar list both order it oldest
+// first) regardless of which tab is open, with its own Answer button —
+// see .incoming-toast in agent.css. Unlike the ring tone, this is NOT
+// silenced by ringMuted — it's the visual channel for agents who've
+// muted audio but still want to see a call come in.
+let lastQueueSnapshot = []; // full queue-update payload, set in renderQueue()
+let toastDismissedCallId = null; // set by the ✕ button — suppresses the toast for that one call only, not the next one
+
+function updateIncomingToast() {
+  const toast = document.getElementById('incoming-call-toast');
+  const head = lastQueueSnapshot[0];
+
+  if (!head || currentCallId || head.callId === toastDismissedCallId) {
+    toast.classList.add('hidden');
+    return;
+  }
+
+  document.getElementById('ict-topic').textContent = head.topic;
+  document.getElementById('ict-lang').textContent = head.languageLabel || '';
+  document.getElementById('ict-kiosk').textContent = head.kioskId || '';
+  document.getElementById('ict-wait').dataset.queuedAt = head.queuedAt;
+  updateIncomingToastWait();
+
+  const noteEl = document.getElementById('ict-transfer-note');
+  if (head.transferNote) {
+    noteEl.textContent = `↪ from ${head.transferredFrom || 'another agent'}: "${head.transferNote}"`;
+    noteEl.classList.remove('hidden');
+  } else if (head.transferredFrom) {
+    noteEl.textContent = `↪ transferred from ${head.transferredFrom}`;
+    noteEl.classList.remove('hidden');
+  } else {
+    noteEl.classList.add('hidden');
+  }
+
+  const moreEl = document.getElementById('ict-more');
+  const extra = lastQueueSnapshot.length - 1;
+  if (extra > 0) {
+    moreEl.textContent = `+${extra} more guest${extra === 1 ? '' : 's'} waiting`;
+    moreEl.classList.remove('hidden');
+  } else {
+    moreEl.classList.add('hidden');
+  }
+
+  toast.classList.remove('hidden');
+}
+
+/** Ticks the toast's "waiting M:SS" readout — called from the same once-a-second interval that updates the sidebar's .qi-wait labels. */
+function updateIncomingToastWait() {
+  const el = document.getElementById('ict-wait');
+  if (!el.dataset.queuedAt) return;
+  const s = Math.floor((Date.now() - Number(el.dataset.queuedAt)) / 1000);
+  el.textContent = ` · waiting ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 // sessionStorage (not localStorage): survives a page refresh, but clears
@@ -374,6 +515,7 @@ function handleServerMessage(msg) {
         alert('That call was already answered by another agent.');
       }
       updateRingingState(); // this tab didn't actually answer — resume ringing if guests are still waiting
+      updateIncomingToast();
       break;
 
     case 'call-assigned':
@@ -384,6 +526,8 @@ function handleServerMessage(msg) {
       currentTransferredFrom = msg.transferredFrom || null;
       currentTransferNote = msg.transferNote || null;
       updateRingingState();
+      updateIncomingToast();
+      switchView('calls'); // a call answered from the toast on the Chats tab needs the Calls tab actually on screen to show it
       startAsAnswerer();
       break;
 
@@ -565,7 +709,9 @@ function renderQueue(queue) {
   const list = document.getElementById('queue-list');
 
   lastQueueLength = queue.length;
+  lastQueueSnapshot = queue;
   updateRingingState();
+  updateIncomingToast();
 
   if (queue.length === 0) {
     list.innerHTML = '<p class="empty-note">No guests waiting.</p>';
@@ -603,6 +749,7 @@ setInterval(() => {
     const s = Math.floor((Date.now() - started) / 1000);
     el.textContent = `waiting ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   });
+  updateIncomingToastWait();
 }, 1000);
 
 function formatBytes(n) {
@@ -780,6 +927,7 @@ async function startAsAnswerer() {
   pc.ontrack = (evt) => {
     remoteStream = evt.streams[0];
     document.getElementById('remote-video').srcObject = remoteStream;
+    applyAudioOutput(selectedAudioOutputId); // pin the call's audio to the same device as the ring tone — see applyAudioOutput() above
   };
   pc.onicecandidate = (evt) => {
     if (evt.candidate) {
@@ -1046,6 +1194,7 @@ function endActiveCallUI() {
   document.getElementById('active-call').classList.add('hidden');
   document.getElementById('no-call-placeholder').classList.remove('hidden');
   updateRingingState(); // resume ringing if another guest is still waiting
+  updateIncomingToast();
 }
 
 function failConnection() {
@@ -1147,6 +1296,23 @@ document.getElementById('btn-toggle-ring').addEventListener('click', () => {
   updateRingingState();
 });
 
+document.getElementById('btn-ict-answer').addEventListener('click', () => {
+  const head = lastQueueSnapshot[0];
+  if (!head) return;
+  if (currentCallId) {
+    alert('End your current call before answering another.');
+    return;
+  }
+  stopRinging(); // instant feedback — the call-assigned/queue-update round trip is a moment away
+  wsSend({ type: 'answer-call', callId: head.callId });
+});
+
+document.getElementById('btn-ict-dismiss').addEventListener('click', () => {
+  const head = lastQueueSnapshot[0];
+  if (head) toastDismissedCallId = head.callId;
+  updateIncomingToast();
+});
+
 document.getElementById('call-notes').addEventListener('input', (e) => {
   clearTimeout(noteDebounce);
   const text = e.target.value;
@@ -1159,13 +1325,14 @@ window.addEventListener('beforeunload', () => {
   if (currentCallId) wsSend({ type: 'end-call', callId: currentCallId });
 });
 
+/** Switches the Calls/Chats tab — factored out of the tab click handler below so call-assigned can also jump the agent to the Calls tab (answering a call from the floating toast on the Chats tab would otherwise land them on a connected call they can't see — see call-assigned above). */
+function switchView(name) {
+  document.querySelectorAll('.view-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+  document.querySelectorAll('.layout.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+}
+
 document.querySelectorAll('.view-tab').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.view-tab').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.layout.view').forEach((v) => v.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(`view-${btn.dataset.view}`).classList.add('active');
-  });
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
 
 document.getElementById('thread-reply-form').addEventListener('submit', (e) => {

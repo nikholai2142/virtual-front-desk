@@ -43,6 +43,15 @@
       </div>
       <div class="topbar-right">
         <span id="wake-lock-indicator" class="wake-lock-indicator hidden" title="Keeping this screen awake so you don't miss a call">☀</span>
+        <!-- Only shown (via JS) in browsers that support HTMLMediaElement.setSinkId
+             (Chrome/Edge/Firefox — not Safari). Lets an agent with more than one
+             audio output (e.g. speakers + a USB headset) pin BOTH the ring tone
+             and the call's audio to the same device, instead of the browser
+             picking a different default for each — see agent.js's
+             applyAudioOutput(). -->
+        <select id="audio-output-select" class="audio-output-select hidden" title="Call audio output (ring tone + call audio)">
+          <option value="">System default</option>
+        </select>
         <button id="btn-open-change-password" class="icon-btn" type="button" title="Change password">⚙</button>
         <button id="btn-sign-out" class="btn-small" type="button">Sign out</button>
         <span id="agent-status-dot" class="status-dot"></span>
@@ -179,6 +188,42 @@
       </div>
     </form>
   </div>
+
+  <!-- INCOMING CALL — floating, high-visibility alert for a new waiting
+       guest. Fixed-position so it shows above whichever tab (Calls/Chats)
+       the agent currently has open — the sidebar queue list alone is easy
+       to miss, especially from the Chats tab where it isn't even visible.
+       See agent.js's updateIncomingToast(). -->
+  <div id="incoming-call-toast" class="incoming-toast hidden" role="alert">
+    <div class="incoming-toast-icon">📞</div>
+    <div class="incoming-toast-body">
+      <div class="incoming-toast-title">Incoming call</div>
+      <div class="incoming-toast-meta">
+        <strong id="ict-topic">—</strong>
+        <span id="ict-lang" class="qi-lang"></span>
+      </div>
+      <div class="incoming-toast-sub">
+        <span id="ict-kiosk"></span><span id="ict-wait"></span>
+      </div>
+      <div id="ict-transfer-note" class="qi-transfer-note hidden"></div>
+      <div id="ict-more" class="incoming-toast-more hidden"></div>
+    </div>
+    <div class="incoming-toast-actions">
+      <button type="button" id="btn-ict-answer" class="incoming-toast-answer">Answer</button>
+      <button type="button" id="btn-ict-dismiss" class="incoming-toast-dismiss" title="Dismiss (keeps ringing)">✕</button>
+    </div>
+  </div>
+
+  <!-- Not shown — the ring tone's actual audio output. agent.js renders the
+       ring oscillator into this element (instead of straight to the
+       AudioContext's default destination) so setSinkId() can route it, same
+       as #remote-video, to whichever device the agent picks in the "Call
+       audio output" selector in the topbar. Kept outside #active-call (not
+       just visually hidden by it) so it keeps working before a call starts —
+       see applyAudioOutput() in agent.js. display:none doesn't stop an
+       audio/video element's playback, it only hides the (nonexistent here)
+       visuals. -->
+  <audio id="ring-audio-sink" autoplay style="display:none"></audio>
 
   <script src="agent.js"></script>
 </body>

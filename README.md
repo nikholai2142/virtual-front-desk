@@ -376,13 +376,15 @@ every call this way is actually compliant where you operate — check with
 whoever handles that for your property before turning this on for real
 guest calls.
 
-## Incoming-call ring tone
+## Incoming-call alert — ring tone + floating pop-up
 
-When a guest starts a call from the kiosk, every signed-in agent's
-dashboard plays a repeating "ring…ring…" tone (a couple of quick tones
-every ~2 seconds) for as long as that guest is waiting unanswered — not
-just a one-off beep, so it's hard to miss if you've stepped away from the
-screen.
+When a guest starts a call from the kiosk, every signed-in agent gets two
+things at once — a sound and a visual — so a new call is hard to miss
+whether or not you're looking at the screen:
+
+**Ring tone.** The dashboard plays a repeating "ring…ring…" tone (a couple
+of quick tones every ~2 seconds) for as long as a guest is waiting
+unanswered — not just a one-off beep.
 
 - The ring stops the instant someone answers (whether that's you or
   another agent), and doesn't play at all while you're already on a call.
@@ -395,6 +397,63 @@ screen.
 - It's generated in the browser with the Web Audio API — no sound file
   to host — so it plays as soon as the queue updates, with no extra
   network request.
+
+**Floating pop-up.** A bright, animated card (pulsing glow, a ringing
+phone icon) slides in from the top of the screen showing the topic,
+kiosk, language, and how long the guest has been waiting, with its own
+**Answer** button — right there, so you don't have to hunt through the
+sidebar list to respond.
+
+- It's pinned to the screen, not the Calls tab, so it still shows even if
+  you're on the **Chats** tab when a call comes in (the sidebar queue list
+  isn't visible from there at all). Clicking **Answer** on it jumps you
+  back to the Calls tab automatically.
+- If more than one guest is waiting, it shows the longest-waiting one and
+  a small "+N more waiting" note; answering or the call being picked up by
+  another agent brings the next one forward automatically.
+- The small **✕** lets you dismiss just that one pop-up (e.g. you've
+  already clicked over to the sidebar) without muting the ring tone or
+  touching the queue — a transferred-in call shows its transfer note the
+  same way the sidebar does.
+- Unlike the ring tone, dismissing or muting the sound doesn't hide the
+  pop-up — it's meant to work for agents who've muted audio (shared
+  front desk, a meeting) but still want a visual cue.
+
+### Ring tone and call audio coming out of different devices
+
+If an agent's computer has more than one audio output plugged in at once —
+most commonly **speakers plus a USB headset** — the browser can end up
+splitting the two: the ring tone plays out of one device while the actual
+call audio plays out of the other. This isn't a bug in this app's audio
+code so much as a mismatch between two different browser defaults — many
+OSes keep a separate "default communications device" (used for call audio)
+from the ordinary "default device" (used for everything else), and there's
+no way for a web page to ask which one the OS picked for which. The only
+reliable fix is to stop relying on either default and pin both to the same
+device explicitly.
+
+**The 🔊 dropdown in the agent dashboard's top bar does exactly that.** It
+lists every audio output the browser can see; picking one routes *both*
+the ring tone and the call's audio to it, so they're never split again.
+It's remembered per browser (like the 🔔 ring mute), so an agent only
+needs to set it once per device they use.
+
+- It only appears in browsers that support `HTMLMediaElement.setSinkId` —
+  **Chrome, Edge, and Firefox**. **Safari has no `setSinkId` at all**
+  (desktop or iOS), so the dropdown stays hidden there and this app can't
+  fix the split for Safari users short of switching browsers.
+- Device **names** only show up once the browser has granted this page a
+  microphone/camera permission at least once (the same limitation the
+  browser itself has) — before that, devices list as "Speaker 1",
+  "Speaker 2", etc. Answering one call is enough to unlock real names from
+  then on.
+- Leaving it on **"System default"** is the original behavior (the
+  browser decides, which is what causes the split in the first place) —
+  switch it to a specific device any time the ring and the call need to
+  agree.
+- Plugging or unplugging a device updates the list live; if the device you
+  had selected disappears, it falls back to "System default" rather than
+  silently failing.
 
 ### Staying connected
 
