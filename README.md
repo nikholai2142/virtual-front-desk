@@ -376,6 +376,13 @@ every call this way is actually compliant where you operate — check with
 whoever handles that for your property before turning this on for real
 guest calls.
 
+The guest's notice is a solid dark pill badge (with a pulsing red dot),
+not just plain text laid over the video — it used to be the latter, which
+could wash out to the point of being unreadable against a bright live feed
+(a sunlit room, a light wall behind the agent). The badge's own background
+doesn't depend on what's behind it, so it stays legible and noticeable
+regardless of how bright the agent's video is.
+
 ## Incoming-call alert — ring tone + floating pop-up
 
 When a guest starts a call from the kiosk, every signed-in agent gets two
@@ -548,15 +555,24 @@ agent who can't help can hand the call to one who can — without the guest
 ever hanging up.
 
 - **The kiosk asks which language the guest speaks** right after "Start
-  Video Call", as a row of big buttons, before it requests camera access.
-  **The picker only offers languages at least one agent on the roster is
-  actually tagged for** — not the full fixed list below — so a guest is
-  never offered a language nobody could ever pick up in the first place.
-  This is based on the agent roster, not who's online at that exact
-  moment, so it doesn't flicker as people sign in and out over a shift. If
-  only one language qualifies (a single-language property, or one that
-  just hasn't added a second-language agent yet), this screen is skipped
-  automatically and that language is used — no extra tap.
+  Video Call", as a row of big buttons — and requests camera/mic access
+  **at the same time**, showing a live self-preview right there on this
+  screen (mirrored, like a mirror) so the guest can check their framing
+  and confirm the camera actually works before they're ever in the queue,
+  instead of only finding out on the next screen. Picking a language
+  reuses that same camera/mic — no second permission prompt, no flicker.
+  If the guest blocks the permission, the preview is simply replaced with
+  a short note; they can still pick a language, and access is asked for
+  again once they do. **The picker only offers languages at least one
+  agent on the roster is actually tagged for** — not the full fixed list
+  below — so a guest is never offered a language nobody could ever pick up
+  in the first place. This is based on the agent roster, not who's online
+  at that exact moment, so it doesn't flicker as people sign in and out
+  over a shift. If only one language qualifies (a single-language
+  property, or one that just hasn't added a second-language agent yet),
+  this screen — and the early preview — is skipped automatically and that
+  language is used, with camera access requested the moment the guest
+  actually starts connecting instead.
 - **Agents are tagged with the language(s) they take calls in** (User
   Management, above) — an agent tagged only "Spanish" only sees Spanish
   calls in their queue; an agent tagged both "English" and "Spanish" sees

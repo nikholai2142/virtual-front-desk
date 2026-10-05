@@ -46,11 +46,19 @@
   <!-- LANGUAGE: guest picks which language to be connected in, so the
        queue can route them to (or transfer them to) an agent who speaks
        it. Skipped automatically if only one language is configured — see
-       kiosk.js's maybeShowLanguageScreen(). -->
+       kiosk.js's maybeShowLanguageScreen(). Also where the camera/mic
+       permission prompt now happens (startLanguagePreview(), kicked off as
+       soon as this screen shows) — a live self-preview here, rather than
+       only after picking a language, lets the guest check their framing
+       and confirm the camera actually works before they're in the queue.
+       The same stream carries straight into the call once they pick a
+       language — see requestMediaAndJoin() reusing `localStream`. -->
   <section id="screen-language" class="screen">
     <div class="center-card">
       <h2>What language do you speak?</h2>
       <p class="sub">We'll connect you with an agent who speaks it.</p>
+      <video id="language-preview-video" class="self-preview" autoplay playsinline muted></video>
+      <p id="language-preview-note" class="preview-note hidden"></p>
       <div id="language-list" class="language-list"></div>
       <button id="btn-cancel-language" class="btn btn-ghost">Cancel</button>
     </div>
@@ -88,7 +96,10 @@
         <span id="call-agent-name">Connecting…</span>
         <span id="call-timer">0:00</span>
       </div>
-      <div class="rec-notice">🔴 This call may be recorded for quality and training purposes.</div>
+      <!-- Wrapped in its own badge (not just text over the video) so it stays
+           readable regardless of how bright the agent's live video is behind
+           it — see .rec-notice/.rec-badge in kiosk.css. -->
+      <div class="rec-notice"><span class="rec-badge"><span class="rec-dot"></span>This call may be recorded for quality and training purposes.</span></div>
       <div id="hold-overlay" class="hold-overlay hidden">
         <div class="hold-overlay-icon">⏸</div>
         <h2>You're on hold</h2>

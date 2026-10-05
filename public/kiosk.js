@@ -293,8 +293,14 @@ function onWsClose() {
     setKioskSignoutMessage('Lost connection — try again.');
   }
 
+  // Includes screen-language and screen-connecting now too — the camera/mic
+  // can already be running on either of those (see startLanguagePreview()),
+  // so a dropped connection there needs the same cleanupCall() as a dropped
+  // call, not just screen-call/screen-waiting.
   const wasOnCall = screens['screen-call'].classList.contains('active') ||
-                     screens['screen-waiting'].classList.contains('active');
+                     screens['screen-waiting'].classList.contains('active') ||
+                     screens['screen-language'].classList.contains('active') ||
+                     screens['screen-connecting'].classList.contains('active');
   if (kioskName) {
     // We were signed in and the connection dropped unexpectedly (network
     // blip, server restart) rather than via an explicit sign-out. Clean up
@@ -595,10 +601,12 @@ function failConnection() {
   );
 }
 
-// Shown after "Start Video Call", before camera permission — lets the guest
-// pick a language so the queue can route (or later transfer) them to an
-// agent who speaks it. Skipped automatically when only one language is
-// configured, so a single-language property sees no extra tap.
+// Shown after "Start Video Call", before the guest is actually in the
+// queue — lets them pick a language so the queue can route (or later
+// transfer) them to an agent who speaks it. Skipped automatically when
+// only one language is configured, so a single-language property sees no
+// extra tap (and in that case camera/mic permission is only requested
+// once they'd land on screen-connecting below, same as before).
 function maybeShowLanguageScreen(topic) {
   pendingTopic = topic;
   if (availableLanguages.length <= 1) {
@@ -616,19 +624,61 @@ function maybeShowLanguageScreen(topic) {
     list.appendChild(btn);
   });
   showScreen('screen-language');
+  startLanguagePreview();
+}
+
+/**
+ * Best-effort early camera/mic request, kicked off as soon as the language
+ * screen shows, so the guest can see a live self-preview (and we can
+ * surface a permission problem) while they're picking a language instead
+ * of only after. Not the authoritative success/failure path — if this
+ * fails or is skipped (a single-language kiosk never calls it),
+ * requestMediaAndJoin() below still tries again once a language is
+ * actually picked; that's unchanged. If it succeeds, requestMediaAndJoin()
+ * reuses this same stream rather than requesting a second one.
+ */
+async function startLanguagePreview() {
+  const video = document.getElementById('language-preview-video');
+  const note = document.getElementById('language-preview-note');
+  note.classList.add('hidden');
+  video.classList.remove('hidden');
+
+  if (localStream && localStream.active) {
+    video.srcObject = localStream;
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStream = stream;
+    // The guest may have already cancelled (or this kiosk moved on some
+    // other way) by the time permission resolves — still keep the stream
+    // on `localStream` so cleanupCall() stops it properly rather than
+    // leaving the camera/mic running with nothing showing it, just don't
+    // attach it to a preview element that's no longer on screen.
+    if (screens['screen-language'].classList.contains('active')) {
+      video.srcObject = stream;
+    }
+  } catch (err) {
+    video.classList.add('hidden');
+    note.textContent = "Can't show a preview — camera/microphone access was blocked. You can still pick a language; we'll ask again once you connect.";
+    note.classList.remove('hidden');
+  }
 }
 
 async function requestMediaAndJoin(topic, language) {
   currentTopic = topic;
   currentLanguage = language || 'en';
   showScreen('screen-connecting');
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    document.getElementById('local-video').srcObject = localStream;
-  } catch (err) {
-    showError('Camera access needed', 'Please allow camera and microphone access, then try again.');
-    return;
+  if (!localStream || !localStream.active) {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (err) {
+      showError('Camera access needed', 'Please allow camera and microphone access, then try again.');
+      return;
+    }
   }
+  document.getElementById('local-video').srcObject = localStream;
 
   document.getElementById('connecting-title').textContent = 'Finding an available agent…';
   document.getElementById('connecting-sub').textContent = '';
@@ -722,7 +772,8 @@ document.getElementById('btn-start-call').addEventListener('click', (e) => {
 
 document.getElementById('btn-cancel-language').addEventListener('click', () => {
   pendingTopic = null;
-  showScreen('screen-idle');
+  cleanupCall(); // stop the preview camera/mic started by startLanguagePreview() — a cancelled guest shouldn't leave it running
+  resetToIdle();
 });
 
 document.getElementById('kiosk-login-form').addEventListener('submit', (e) => {
