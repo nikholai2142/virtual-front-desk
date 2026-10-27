@@ -152,8 +152,14 @@
         </section>
 
         <section class="panel panel-full">
-          <h2>Agent details</h2>
-          <p class="stats-hint">Click an agent (or a bar above) for their full call history and recordings.</p>
+          <div class="panel-head-row">
+            <h2>Agent details</h2>
+            <div class="export-btn-group">
+              <button type="button" id="btn-export-perf-csv" class="btn-small">Export CSV</button>
+              <button type="button" id="btn-export-perf-pdf" class="btn-small">Export PDF</button>
+            </div>
+          </div>
+          <p class="stats-hint">Click an agent (or a bar above) for their full call history and recordings. The exports cover every agent currently shown below, for whichever date range is selected above.</p>
           <div id="stats-table" class="stats-table"></div>
         </section>
       </div>
@@ -296,7 +302,13 @@
   <div id="agent-detail-modal" class="modal-overlay hidden">
     <div class="modal-card agent-detail-card">
       <div class="agent-detail-header">
-        <h2 id="agent-detail-name">—</h2>
+        <div class="agent-detail-header-left">
+          <h2 id="agent-detail-name">—</h2>
+          <div class="export-btn-group">
+            <button type="button" id="btn-export-agent-csv" class="btn-small">Export CSV</button>
+            <button type="button" id="btn-export-agent-pdf" class="btn-small">Export PDF</button>
+          </div>
+        </div>
         <button type="button" id="btn-close-agent-detail" class="icon-btn" title="Close">✕</button>
       </div>
       <div id="agent-detail-totals" class="agent-detail-totals"></div>

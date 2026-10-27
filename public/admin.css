@@ -280,8 +280,13 @@ html, body {
 
 /* Agent detail modal */
 .agent-detail-card { max-width: 640px; max-height: 80vh; display: flex; flex-direction: column; }
-.agent-detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.agent-detail-header h2 { margin: 0; font-size: 18px; }
+.agent-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.agent-detail-header h2 { margin: 0; font-size: 18px; white-space: nowrap; }
+/* Groups the title with its export buttons so "space-between" still pins
+   the ✕ to the far right with exactly two flex children, instead of
+   centering a third (middle) child between title and ✕. */
+.agent-detail-header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.export-btn-group { display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
 .agent-detail-totals {
   display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--sub); font-size: 13px;
   border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 14px;

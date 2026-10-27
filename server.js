@@ -1381,9 +1381,10 @@ function handleCallConfig(req, res) {
   // `languages` is scoped to what's actually usable right now — only
   // languages at least one configured agent is tagged for (not just who's
   // currently online: an agent who's briefly signed off still counts, so
-  // this doesn't flicker as people log in and out). This is what the kiosk's
-  // language picker and an agent's Transfer-target dropdown show, since
-  // offering a language nobody on the roster speaks would be a dead end.
+  // this doesn't flicker as people log in and out). This is what an agent's
+  // Transfer-target dropdown shows, since offering a language nobody on the
+  // roster speaks would be a dead end, and a transfer is a deliberate
+  // in-the-moment action an agent can retry if it turns out nobody's free.
   // `allLanguages` is every language the admin currently has enabled
   // (Configuration > Languages), regardless of who's tagged for what — the
   // admin dashboard needs that one, so a property can tag its first agent
@@ -1395,7 +1396,26 @@ function handleCallConfig(req, res) {
   const enabled = supportedLanguages();
   let languages = enabled.filter((l) => activeCodes.has(l.code));
   if (!languages.length) languages = enabled.filter((l) => l.code === DEFAULT_LANGUAGE); // safety net if somehow no agent has any language tagged (e.g. every agent was just deleted)
-  sendJson(res, 200, { maxHoldSeconds: CONFIG.maxHoldSeconds, logoSizePx: CONFIG.logoSizePx, languages, allLanguages: enabled });
+
+  // `activeLanguages` is scoped tighter — only languages a CURRENTLY
+  // SIGNED-IN agent is tagged for. This is what the kiosk's own language
+  // picker shows: a guest standing at the lobby tablet right now only cares
+  // who can actually pick up, not who's tagged for a language but off
+  // shift. Deliberately DOES flicker as agents sign in/out (the kiosk
+  // re-fetches this right before showing the picker — see
+  // maybeShowLanguageScreen() in kiosk.js), unlike `languages` above.
+  const onlineCodes = new Set();
+  for (const conn of agentConns) for (const code of agentLanguages(conn)) onlineCodes.add(code);
+  let activeLanguages = enabled.filter((l) => onlineCodes.has(l.code));
+  if (!activeLanguages.length) activeLanguages = enabled.filter((l) => l.code === DEFAULT_LANGUAGE); // safety net: nobody online right now (or none of them tagged for an enabled language)
+
+  sendJson(res, 200, {
+    maxHoldSeconds: CONFIG.maxHoldSeconds,
+    logoSizePx: CONFIG.logoSizePx,
+    languages,
+    activeLanguages,
+    allLanguages: enabled,
+  });
 }
 
 async function handleTurnCredentials(req, res) {

@@ -383,6 +383,32 @@ could wash out to the point of being unreadable against a bright live feed
 doesn't depend on what's behind it, so it stays legible and noticeable
 regardless of how bright the agent's video is.
 
+### "You're connected with…" notice
+
+The moment the guest's video call actually connects — not just when an
+agent clicks Answer, but once audio/video is really flowing between the
+two browsers — the kiosk shows a brief, hard-to-miss spotlight:
+
+- The video dims slightly and a center-screen card appears with a pulsing
+  ring around the agent's initial and **"You're connected with
+  &lt;agent&gt;"**, plus the call topic underneath. It intentionally mirrors
+  the pulsing-ring style already used for the agent dashboard's own
+  incoming-call alert, so the hand-off feels the same from both sides of
+  the call.
+- After about three seconds it shrinks into a small, quieter badge —
+  **"Connected · &lt;agent&gt;"** — that stays up for the rest of the call,
+  stacked directly under the recording notice (never on top of it, even on
+  a narrow screen), so the guest can always glance up and see who they're
+  talking to without it ever blocking the video.
+
+If a call gets transferred to a different agent mid-call (see "Multi-
+language support & call transfer" below), the same sequence plays again
+for the new agent once *that* connection goes through — it's tied to the
+actual WebRTC connection, not to the call as a whole, so a guest handed
+off partway through still gets a clear "you're now connected with
+&lt;new agent&gt;" moment instead of the badge just silently relabeling
+itself.
+
 ## Incoming-call alert — ring tone + floating pop-up
 
 When a guest starts a call from the kiosk, every signed-in agent gets two
@@ -554,24 +580,28 @@ A guest picks their language on the kiosk before a call starts, and an
 agent who can't help can hand the call to one who can — without the guest
 ever hanging up.
 
-- **The kiosk asks which language the guest speaks** right after "Start
-  Video Call", as a row of big buttons — and requests camera/mic access
-  **at the same time**, showing a live self-preview right there on this
-  screen (mirrored, like a mirror) so the guest can check their framing
-  and confirm the camera actually works before they're ever in the queue,
-  instead of only finding out on the next screen. Picking a language
-  reuses that same camera/mic — no second permission prompt, no flicker.
-  If the guest blocks the permission, the preview is simply replaced with
-  a short note; they can still pick a language, and access is asked for
-  again once they do. **The picker only offers languages at least one
-  agent on the roster is actually tagged for** — not the full fixed list
-  below — so a guest is never offered a language nobody could ever pick up
-  in the first place. This is based on the agent roster, not who's online
-  at that exact moment, so it doesn't flicker as people sign in and out
-  over a shift. If only one language qualifies (a single-language
-  property, or one that just hasn't added a second-language agent yet),
-  this screen — and the early preview — is skipped automatically and that
-  language is used, with camera access requested the moment the guest
+- **The kiosk asks the guest to select their preferred language** ("Please
+  select your preferred language") right after "Start Video Call", as a
+  row of big buttons — and requests camera/mic access **at the same
+  time**, showing a live self-preview right there on this screen (mirrored,
+  like a mirror) so the guest can check their framing and confirm the
+  camera actually works before they're ever in the queue, instead of only
+  finding out on the next screen. Picking a language reuses that same
+  camera/mic — no second permission prompt, no flicker. If the guest blocks
+  the permission, the preview is simply replaced with a short note; they
+  can still pick a language, and access is asked for again once they do.
+  **The picker only offers languages at least one agent who is CURRENTLY
+  SIGNED IN is actually tagged for** — not the full roster and not the full
+  fixed list below — so a guest is never offered a language nobody can
+  actually pick up right now. This is deliberately re-checked the instant
+  "Start Video Call" is tapped (not just once at kiosk boot), so it tracks
+  who's on shift at that exact moment — if the one Spanish-speaking agent
+  signs out, Spanish drops off the picker the next time a guest starts a
+  call, and reappears the moment they sign back in. If only one language
+  qualifies at that moment (a single-language property, nobody else
+  currently online, or one that just hasn't added a second-language agent
+  yet), this screen — and the early preview — is skipped automatically and
+  that language is used, with camera access requested the moment the guest
   actually starts connecting instead.
 - **Agents are tagged with the language(s) they take calls in** (User
   Management, above) — an agent tagged only "Spanish" only sees Spanish
@@ -739,6 +769,30 @@ page, so the totals you see there always match the row or bar you clicked.
 An agent who's been removed still keeps their calls in the chart/table for
 any range that covers them; an agent who's on file but simply had no calls
 in the selected range shows a row with **0 calls** rather than disappearing.
+
+**Exporting — CSV and PDF, for everyone or for one agent:**
+
+- **"Export CSV" / "Export PDF" on the Agent details panel** export every
+  agent currently shown in that table/chart — one row per agent (calls,
+  average/total talk time, hold time, most common kiosk, last call, average
+  rating) — for whichever date range the filter above is set to.
+- **The same two buttons inside an agent's detail view** (click their row
+  or a bar to open it) instead export that one agent's **full call
+  history** — one row per call (date, kiosk, duration, hold time, agent
+  notes, rating, and the recording link where one exists) — also scoped to
+  the currently selected date range.
+- Either CSV downloads straight to your computer, ready for a spreadsheet.
+  Either PDF opens a plain, print-formatted report in a new tab and invokes
+  your browser's print dialog, where **"Save as PDF" is a built-in
+  destination** — this app has zero npm dependencies by design (see the
+  top of this README), so "export to PDF" is the browser's own print-to-PDF
+  rather than a bundled PDF-generation library. If your browser blocks the
+  pop-up, allow pop-ups for this site and try again. Both exports work from
+  whatever's already on screen, so they always match the date range (and,
+  for the per-agent export, the agent) you're currently looking at — no
+  separate "which range do you want" step.
+- Exporting with nothing to export (e.g. an agent who's never taken a
+  call) shows a message instead of downloading an empty file.
 
 ### User Management
 

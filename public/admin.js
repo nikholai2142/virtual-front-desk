@@ -16,6 +16,15 @@ let refreshHandle = null;
 // from there rather than via "Change my password" in the topbar.
 let currentAdminId = null;
 
+// ---- Agent Performance exports (CSV / PDF) ----
+// Both export flows work off whatever's already on screen — the last data
+// loadPerformanceStats()/renderAgentDetail() fetched — rather than
+// re-querying the server, so "export" always matches exactly what the admin
+// is currently looking at (same date-range filter, same rows).
+let lastPerfStats = []; // every agent row currently shown on the Agent Performance page
+let lastPerfRangeLabel = 'All time';
+let lastAgentDetailData = null; // the agent-detail-modal's last-loaded { agent, totals, calls }
+
 // The FULL supported-language list — fetched once at load (no auth needed,
 // same endpoint the kiosk and agent dashboard use). This admin page
 // deliberately uses `allLanguages`, not the `languages` field those other
@@ -757,6 +766,170 @@ function renderPerfCharts(stats) {
   });
 }
 
+// ---- CSV / PDF export (Agent Performance's "Agent details" table, and the
+// per-agent detail modal) — both are plain client-side renders of data
+// that's already been fetched, not separate server endpoints, so an export
+// always matches exactly what's on screen (same date-range filter, same
+// rows) with no extra round trip. ----
+
+/** Quotes a CSV field only when it needs it (contains a comma, quote, or newline) — doubling any embedded quotes, per RFC 4180. */
+function csvField(value) {
+  const s = value === null || value === undefined ? '' : String(value);
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/** Builds a CSV string from a header row + data rows and triggers a browser download — no library, just a Blob and a throwaway <a download>. */
+function downloadCsv(filename, headerRow, dataRows) {
+  const csv = [headerRow, ...dataRows].map((row) => row.map(csvField).join(',')).join('\r\n');
+  // Leading BOM so Excel (which guesses encoding from the first bytes, not
+  // declared charset) opens non-ASCII text — guest names, agent notes —
+  // as UTF-8 instead of mangling it.
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * "Export PDF" without a PDF library: opens a plain, print-formatted HTML
+ * report in a new tab/window and invokes the browser's own print dialog,
+ * where "Save as PDF" is a built-in destination on every modern browser —
+ * matching this project's zero-npm-dependency approach (see README) rather
+ * than pulling in a PDF-generation package for one feature. If pop-ups are
+ * blocked, the admin gets a plain message instead of a silent no-op.
+ */
+function exportPrintReport({ title, subtitle, headerRow, dataRows }) {
+  const win = window.open('', '_blank', 'width=980,height=720');
+  if (!win) {
+    alert('Your browser blocked the export window — please allow pop-ups for this site and try again.');
+    return;
+  }
+  const theadHtml = `<tr>${headerRow.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr>`;
+  const tbodyHtml = dataRows.length
+    ? dataRows.map((row) => `<tr>${row.map((v) => `<td>${escapeHtml(v === null || v === undefined ? '' : String(v))}</td>`).join('')}</tr>`).join('')
+    : `<tr><td colspan="${headerRow.length}" class="empty">No data in this range.</td></tr>`;
+  win.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #16232e; margin: 32px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: #5b6b78; font-size: 13px; margin: 0 0 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #d7e2ea; vertical-align: top; }
+  th { background: #f4f7fa; font-weight: 700; }
+  td.empty { text-align: center; color: #5b6b78; padding: 20px; }
+  @media print {
+    body { margin: 12mm; }
+    @page { margin: 12mm; }
+  }
+</style>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  ${subtitle ? `<p class="subtitle">${escapeHtml(subtitle)}</p>` : ''}
+  <table><thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table>
+</body>
+</html>`);
+  win.document.close();
+  win.focus();
+  // A short delay so the new tab finishes its initial layout before the
+  // print dialog opens over it — calling print() immediately can race that
+  // paint in some browsers and show a blank/incomplete page underneath.
+  setTimeout(() => { try { win.print(); } catch { /* admin can still print manually from the tab that opened */ } }, 300);
+}
+
+/** yyyymmdd for export filenames — sorts naturally and has no characters that need escaping on any OS. */
+function exportDateStamp() {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Turns an agent's name into a safe filename fragment. */
+function slugifyForFilename(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+}
+
+const PERF_EXPORT_HEADER = ['Agent', 'Calls', 'Avg Talk Time', 'Total Talk Time', 'Hold Time', 'Hold Count', 'Most Common Kiosk', 'Last Call', 'Avg Rating', 'Rating Count'];
+
+/** One export row per agent, matching exactly what's in the "Agent details" table/charts right now. Shared by the CSV and PDF export so the two formats never drift apart. */
+function perfExportRows() {
+  return lastPerfStats.map((s) => [
+    s.agentName,
+    s.calls,
+    formatDuration(s.avgTalkSeconds),
+    formatDuration(s.totalTalkSeconds),
+    formatDuration(s.totalHoldSeconds),
+    s.totalHoldCount,
+    s.topKiosk || '',
+    s.lastCallAt ? new Date(s.lastCallAt).toLocaleString() : 'Never',
+    s.ratingCount ? s.avgRating.toFixed(1) : '',
+    s.ratingCount,
+  ]);
+}
+
+document.getElementById('btn-export-perf-csv').addEventListener('click', () => {
+  if (!lastPerfStats.length) { alert('No agent data to export yet.'); return; }
+  downloadCsv(`agent-performance-${exportDateStamp()}.csv`, PERF_EXPORT_HEADER, perfExportRows());
+});
+
+document.getElementById('btn-export-perf-pdf').addEventListener('click', () => {
+  if (!lastPerfStats.length) { alert('No agent data to export yet.'); return; }
+  exportPrintReport({
+    title: 'Agent Performance',
+    subtitle: `Date range: ${lastPerfRangeLabel} · Generated ${new Date().toLocaleString()}`,
+    headerRow: PERF_EXPORT_HEADER,
+    dataRows: perfExportRows(),
+  });
+});
+
+const AGENT_DETAIL_EXPORT_HEADER = ['Date', 'Topic', 'Kiosk', 'Duration', 'Hold Time', 'Notes', 'Rating', 'Rating Guest', 'Rating Remarks', 'Recording'];
+
+/** One export row per call, for whichever agent's detail modal is currently open — matches exactly what's listed in the modal's call history. */
+function agentDetailExportRows() {
+  return lastAgentDetailData.calls.map((c) => {
+    const dur = Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000));
+    return [
+      new Date(c.answeredAt).toLocaleString(),
+      c.topic || '',
+      c.kioskId || '',
+      formatDuration(dur),
+      c.holdSeconds ? formatDuration(c.holdSeconds) : '',
+      c.notes || '',
+      c.rating ? c.rating.stars : '',
+      c.rating?.guestName || '',
+      c.rating?.remarks || '',
+      c.recording ? (c.recording.missing ? 'No longer available' : c.recording.url) : '',
+    ];
+  });
+}
+
+document.getElementById('btn-export-agent-csv').addEventListener('click', () => {
+  if (!lastAgentDetailData || !lastAgentDetailData.calls.length) { alert('No calls to export for this agent yet.'); return; }
+  const filename = `${slugifyForFilename(lastAgentDetailData.agent.name)}-calls-${exportDateStamp()}.csv`;
+  downloadCsv(filename, AGENT_DETAIL_EXPORT_HEADER, agentDetailExportRows());
+});
+
+document.getElementById('btn-export-agent-pdf').addEventListener('click', () => {
+  if (!lastAgentDetailData || !lastAgentDetailData.calls.length) { alert('No calls to export for this agent yet.'); return; }
+  const t = lastAgentDetailData.totals;
+  exportPrintReport({
+    title: `${lastAgentDetailData.agent.name} — Call History`,
+    subtitle: `Date range: ${lastPerfRangeLabel} · ${t.calls} call${t.calls === 1 ? '' : 's'} · Generated ${new Date().toLocaleString()}`,
+    headerRow: AGENT_DETAIL_EXPORT_HEADER,
+    dataRows: agentDetailExportRows(),
+  });
+});
+
 // ---- Dashboard (filterable combined stats + calls-over-time chart) ----
 
 let lastOverviewEntries = [];
@@ -798,6 +971,18 @@ function resolvePerfDateRange() {
   return resolveDateRangeFor('perf-filter-range', 'perf-filter-from', 'perf-filter-to');
 }
 
+/** Human-readable label for whatever the Agent Performance page's date-range filter is currently set to — used as the subtitle on exported CSV/PDF reports so a file opened later still says what range it covers. */
+function perfRangeLabel() {
+  const sel = document.getElementById('perf-filter-range');
+  const selected = sel.options[sel.selectedIndex];
+  if (sel.value === 'custom') {
+    const from = document.getElementById('perf-filter-from').value;
+    const to = document.getElementById('perf-filter-to').value;
+    if (from || to) return `${from || 'earliest'} to ${to || 'today'}`;
+  }
+  return selected ? selected.textContent : 'All time';
+}
+
 document.getElementById('filter-range').addEventListener('change', () => {
   const isCustom = document.getElementById('filter-range').value === 'custom';
   document.getElementById('filter-from-field').classList.toggle('hidden', !isCustom);
@@ -830,6 +1015,8 @@ async function loadPerformanceStats() {
     document.getElementById('stats-note').textContent = data.note;
     renderStatsTable(data.agents);
     renderPerfCharts(data.agents);
+    lastPerfStats = data.agents;
+    lastPerfRangeLabel = perfRangeLabel();
   } catch (err) {
     if (err.status === 401) return; // the next refreshAll() tick will handle bouncing back to sign-in
     console.warn('Could not load agent performance stats:', err);
@@ -986,6 +1173,7 @@ async function openAgentDetail(agentId) {
   document.getElementById('agent-detail-name').textContent = 'Loading…';
   document.getElementById('agent-detail-totals').innerHTML = '';
   document.getElementById('agent-detail-calls').innerHTML = '';
+  lastAgentDetailData = null; // clear any previous agent's data so a failed load below can't leave its export buttons pointing at the wrong agent
   modal.classList.remove('hidden');
   try {
     // Opened only from the Agent Performance page (its table rows and chart
@@ -1004,6 +1192,7 @@ async function openAgentDetail(agentId) {
 }
 
 function renderAgentDetail(data) {
+  lastAgentDetailData = data; // feeds the modal's own Export CSV/PDF buttons — see the export section above
   document.getElementById('agent-detail-name').textContent = data.agent.name;
 
   const t = data.totals;

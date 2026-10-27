@@ -28,6 +28,10 @@ const CONNECT_TIMEOUT_MS = 15 * 1000; // if WebRTC never reaches "connected" in 
                                         // (most commonly: no TURN server and the network
                                         // blocks direct peer-to-peer), fail loudly instead
                                         // of leaving the guest staring at a blank screen.
+const CONNECTED_TOAST_MS = 3200; // how long the center-screen "You're connected
+                                   // with <agent>" spotlight stays up before it
+                                   // shrinks into the small corner badge — see
+                                   // showConnectedNotice() below.
 
 // ---- Kiosk identity / login ---------------------------------------------
 // Each kiosk device signs in with its own kiosk account (name + password,
@@ -224,12 +228,22 @@ let callTimerHandle = null;
 let micOn = true;
 let camOn = true;
 let connectTimeoutHandle = null;
+// Whether the "connected to <agent>" spotlight has already played for the
+// CURRENT peer connection — reset in startPeerConnection() so a transfer
+// (teardownPeerConnectionOnly() + a fresh pc to the next agent) plays it
+// again for the new agent, rather than only ever once per call.
+let connectedNoticeShown = false;
+let connectedNoticeTimer = null;
 
 // ---- Language picker -----------------------------------------------------
-// Fetched once at boot from the server (the source of truth — see
-// SUPPORTED_LANGUAGES in server.js) so this list can never drift out of
-// sync with what agents can actually be tagged for. Falls back to English
-// only if the request fails, so the kiosk still works through a hiccup.
+// Scoped to CURRENTLY SIGNED-IN agents (server's `activeLanguages`, not the
+// full-roster `languages`) — a guest standing at the kiosk right now only
+// cares who can actually pick up, not who's tagged for a language but off
+// shift. Fetched once at boot, then re-fetched right before the picker is
+// shown (see maybeShowLanguageScreen()) so it reflects who's online at the
+// moment that matters, not just whoever was on shift when the kiosk booted.
+// Falls back to English only if the request fails, so the kiosk still works
+// through a hiccup.
 let availableLanguages = [{ code: 'en', label: 'English' }];
 let currentLanguage = 'en';
 let pendingTopic = null;
@@ -238,7 +252,10 @@ async function loadCallConfig() {
   try {
     const res = await fetch('/api/call-config');
     const data = await res.json();
-    if (Array.isArray(data.languages) && data.languages.length) availableLanguages = data.languages;
+    const languages = Array.isArray(data.activeLanguages) && data.activeLanguages.length
+      ? data.activeLanguages
+      : data.languages; // older server / unexpected shape — fall back to the roster-based list rather than nothing
+    if (Array.isArray(languages) && languages.length) availableLanguages = languages;
     // Admin-configurable logo size (Configuration > Kiosk appearance) — a
     // CSS custom property so .brand-mark (kiosk.css) picks it up for both
     // the login and idle screens' logos in one place. Falls back to
@@ -556,8 +573,57 @@ async function handleSignal(signalType, data) {
   }
 }
 
+/**
+ * Shows the "You're connected with <agent>" spotlight (center-screen,
+ * pulsing-ring avatar — mirrors the agent dashboard's own incoming-call
+ * toast) and, after CONNECTED_TOAST_MS, swaps it for a small persistent
+ * corner badge that stays up for the rest of the call. Called once per
+ * peer connection, the moment it actually reaches 'connected' — see
+ * pc.onconnectionstatechange below.
+ */
+function showConnectedNotice(agentName, topic) {
+  const name = agentName || 'your agent';
+  const initial = name.trim().charAt(0).toUpperCase() || '?';
+
+  document.getElementById('connected-toast-avatar').textContent = initial;
+  document.getElementById('connected-toast-name').textContent = name;
+  document.getElementById('connected-toast-sub').textContent = topic || '';
+  document.getElementById('connected-badge-avatar').textContent = initial;
+  document.getElementById('connected-badge-text').textContent = `Connected · ${name}`;
+
+  const dim = document.getElementById('connected-dim');
+  const toast = document.getElementById('connected-toast');
+  const badge = document.getElementById('connected-badge');
+
+  badge.classList.add('hidden');
+  dim.classList.remove('hidden');
+  toast.classList.remove('hidden');
+
+  clearTimeout(connectedNoticeTimer);
+  connectedNoticeTimer = setTimeout(() => {
+    dim.classList.add('hidden');
+    toast.classList.add('hidden');
+    // Only on the call screen is there anywhere for the badge to sit — a
+    // guest who already hung up (or got transferred, see
+    // teardownPeerConnectionOnly()) shouldn't see it pop in behind them.
+    if (screens['screen-call'].classList.contains('active')) badge.classList.remove('hidden');
+  }, CONNECTED_TOAST_MS);
+}
+
+/** Clears both stages of the notice and cancels its timer — called whenever
+ *  the call screen is torn down (hangup, transfer, error) so nothing lingers
+ *  or pops in for the next call. */
+function hideConnectedNotice() {
+  clearTimeout(connectedNoticeTimer);
+  document.getElementById('connected-dim').classList.add('hidden');
+  document.getElementById('connected-toast').classList.add('hidden');
+  document.getElementById('connected-badge').classList.add('hidden');
+}
+
 async function startPeerConnection() {
   if (pc) { pc.close(); pc = null; } // defensive — should already be null (see teardownPeerConnectionOnly)
+  connectedNoticeShown = false;
+  hideConnectedNotice();
   const iceServers = await getIceServers();
   pc = new RTCPeerConnection({ iceServers });
 
@@ -576,6 +642,10 @@ async function startPeerConnection() {
     console.warn('Peer connection state:', pc.connectionState);
     if (pc.connectionState === 'connected') {
       clearTimeout(connectTimeoutHandle);
+      if (!connectedNoticeShown) {
+        connectedNoticeShown = true;
+        showConnectedNotice(currentAgentName, currentTopic);
+      }
     } else if (pc.connectionState === 'failed') {
       clearTimeout(connectTimeoutHandle);
       failConnection();
@@ -737,6 +807,7 @@ function cleanupCall() {
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   micOn = true; camOn = true;
   document.getElementById('hold-overlay').classList.add('hidden');
+  hideConnectedNotice();
 }
 
 /**
@@ -752,6 +823,7 @@ function teardownPeerConnectionOnly() {
   pendingIceCandidates = [];
   if (pc) { pc.close(); pc = null; }
   document.getElementById('hold-overlay').classList.add('hidden');
+  hideConnectedNotice(); // the outgoing agent's notice shouldn't linger into the transfer wait
 }
 
 function showError(title, message) {
@@ -766,8 +838,16 @@ function resetToIdle() {
 }
 
 // ---- UI wiring ----
-document.getElementById('btn-start-call').addEventListener('click', (e) => {
-  maybeShowLanguageScreen(e.currentTarget.dataset.topic);
+document.getElementById('btn-start-call').addEventListener('click', async (e) => {
+  const topic = e.currentTarget.dataset.topic;
+  // Re-fetch which languages are usable right now (who's actually signed in
+  // at this exact moment), rather than relying on whatever was current when
+  // the kiosk booted — a quick call, and this is the moment that matters:
+  // it decides both which languages the picker offers and whether the
+  // picker even shows at all (maybeShowLanguageScreen skips it for a
+  // single-language result).
+  await loadCallConfig();
+  maybeShowLanguageScreen(topic);
 });
 
 document.getElementById('btn-cancel-language').addEventListener('click', () => {

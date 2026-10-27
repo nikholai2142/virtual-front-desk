@@ -55,7 +55,7 @@
        language — see requestMediaAndJoin() reusing `localStream`. -->
   <section id="screen-language" class="screen">
     <div class="center-card">
-      <h2>What language do you speak?</h2>
+      <h2>Please select your preferred language</h2>
       <p class="sub">We'll connect you with an agent who speaks it.</p>
       <video id="language-preview-video" class="self-preview" autoplay playsinline muted></video>
       <p id="language-preview-note" class="preview-note hidden"></p>
@@ -100,6 +100,37 @@
            readable regardless of how bright the agent's live video is behind
            it — see .rec-notice/.rec-badge in kiosk.css. -->
       <div class="rec-notice"><span class="rec-badge"><span class="rec-dot"></span>This call may be recorded for quality and training purposes.</span></div>
+
+      <!-- "Connected to <agent>" notice — shown once the WebRTC connection
+           actually reaches 'connected' (see pc.onconnectionstatechange in
+           kiosk.js), not just once the agent accepts the call, so it tracks
+           the moment the guest can really see/hear the agent. Starts as a
+           center-screen spotlight (connected-dim + connected-toast) that
+           mirrors the pulsing-ring style of the agent dashboard's incoming-
+           call alert, then retires into a small corner badge
+           (connected-badge) that stays up for the rest of the call —
+           see showConnectedNotice()/hideConnectedNotice() in kiosk.js. -->
+      <div id="connected-dim" class="connected-dim hidden" aria-hidden="true"></div>
+      <div id="connected-toast" class="connected-toast hidden" role="status" aria-live="polite">
+        <div class="connected-toast-avatar-wrap" aria-hidden="true">
+          <span class="connected-toast-ring"></span>
+          <span class="connected-toast-ring connected-toast-ring-delay"></span>
+          <div id="connected-toast-avatar" class="connected-toast-avatar"></div>
+        </div>
+        <div class="connected-toast-text">
+          <div class="connected-toast-title">You're connected with <span id="connected-toast-name"></span></div>
+          <div id="connected-toast-sub" class="connected-toast-sub"></div>
+        </div>
+      </div>
+      <!-- Centered under .rec-notice (not corner-anchored) so the two never
+           overlap — .rec-notice can run nearly full width on a narrow
+           screen, which a fixed corner badge would collide with. -->
+      <div class="connected-badge-row">
+        <div id="connected-badge" class="connected-badge hidden" role="status" aria-live="off">
+          <div id="connected-badge-avatar" class="connected-badge-avatar" aria-hidden="true"></div>
+          <span id="connected-badge-text"></span>
+        </div>
+      </div>
       <div id="hold-overlay" class="hold-overlay hidden">
         <div class="hold-overlay-icon">⏸</div>
         <h2>You're on hold</h2>

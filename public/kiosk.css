@@ -251,6 +251,113 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
   animation: rec-dot-pulse 1.6s ease-in-out infinite;
 }
 @keyframes rec-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---- "Connected to <agent>" notice ----
+   Fires once the WebRTC connection actually reaches 'connected' (see
+   showConnectedNotice() in kiosk.js) — a guest who's been staring at
+   "Connecting…" needs an unmistakable hand-off cue the instant the agent is
+   really there. Two stages: a brief center-screen spotlight
+   (.connected-dim + .connected-toast, mirrors the pulsing-ring treatment
+   already used for the agent dashboard's own incoming-call toast), then it
+   retires into a small persistent badge (.connected-badge) that stays up
+   for the rest of the call so the agent's name is never more than a glance
+   away, without permanently blocking the video the way the full spotlight
+   would. Centered directly under .rec-notice (not corner-anchored) — the
+   recording badge can run nearly full width on a narrow screen, and a
+   fixed corner badge would collide with it there. */
+.connected-dim {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  z-index: 5;
+  transition: opacity 0.25s ease;
+}
+.connected-dim.hidden { opacity: 0; pointer-events: none; }
+
+.connected-toast {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  width: min(360px, calc(100vw - 56px));
+  background: rgba(13, 20, 27, 0.92);
+  border: 1px solid rgba(34, 197, 94, 0.5);
+  border-radius: 20px;
+  padding: 30px 32px;
+  text-align: center;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.15), 0 20px 50px rgba(0, 0, 0, 0.5);
+  animation: ct-pop-in-centered 0.3s ease;
+}
+.connected-toast.hidden { display: none; }
+.connected-toast-avatar-wrap { position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; }
+.connected-toast-ring {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--good);
+  animation: ct-ring-out 1.8s ease-out infinite;
+}
+.connected-toast-ring-delay { animation-delay: 0.6s; }
+.connected-toast-avatar {
+  width: 62px; height: 62px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2fd889, var(--good));
+  display: flex; align-items: center; justify-content: center;
+  color: #06210f; font-size: 24px; font-weight: 800;
+  box-shadow: 0 6px 18px rgba(34, 197, 94, 0.45);
+}
+.connected-toast-title { color: #ffffff; font-size: 20px; font-weight: 800; }
+.connected-toast-title span { color: var(--good); }
+.connected-toast-sub { color: rgba(255, 255, 255, 0.72); font-size: 13px; font-weight: 600; margin-top: 4px; }
+
+.connected-badge-row {
+  position: absolute; top: 108px; left: 0; right: 0;
+  display: flex; justify-content: center; padding: 0 16px;
+  z-index: 4;
+  pointer-events: none;
+}
+.connected-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  max-width: calc(100vw - 48px);
+  background: rgba(8, 40, 27, 0.78);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  border-radius: 999px;
+  padding: 6px 14px 6px 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  animation: ct-pop-in 0.25s ease;
+}
+.connected-badge.hidden { display: none; }
+.connected-badge-avatar {
+  width: 22px; height: 22px; flex-shrink: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2fd889, var(--good));
+  display: flex; align-items: center; justify-content: center;
+  color: #06210f; font-size: 11px; font-weight: 800;
+}
+#connected-badge-text { color: #ffffff; font-size: 12.5px; font-weight: 700; }
+
+@keyframes ct-pop-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* Same pop as ct-pop-in, but keeps .connected-toast's own centering
+   transform (translate(-50%, -50%)) intact throughout — ct-pop-in alone
+   would momentarily overwrite it and the toast would jump off-center. */
+@keyframes ct-pop-in-centered {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.94); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes ct-ring-out {
+  0% { transform: scale(0.9); opacity: 0.55; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .connected-toast, .connected-badge, .connected-toast-ring { animation: none; }
+}
+@media (max-width: 480px) {
+  .connected-toast { padding: 22px 20px; width: min(300px, calc(100vw - 40px)); }
+  .connected-badge-row { top: 100px; }
+}
+
 .call-controls {
   position: absolute;
   bottom: 24px; left: 0; right: 0;
