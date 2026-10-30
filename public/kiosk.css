@@ -467,3 +467,9 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 .hold-overlay-icon { font-size: 56px; margin-bottom: 4px; }
 .hold-overlay h2 { margin: 8px 0 4px; }
 .hold-overlay .sub { margin: 0; max-width: 420px; }
+
+/* "All agents are busy" prompt (waiting screen) — see kiosk.js showBusyPrompt() */
+#waiting-busy { text-align: center; }
+.busy-icon { font-size: 44px; line-height: 1; margin-bottom: 10px; }
+.busy-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+.busy-actions .btn { min-width: 150px; }

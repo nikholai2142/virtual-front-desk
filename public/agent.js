@@ -232,6 +232,39 @@ function playRingPulse() {
   } catch { /* ignore */ }
 }
 
+// ---- Online / Busy status ---------------------------------------------
+// An agent who's stepping away (lunch, helping someone in person) sets
+// themselves to "busy": no ring tone and no floating pop-up for new calls.
+// The server knows too (see 'set-status') — when EVERY agent is busy it tells
+// the waiting kiosk, which asks the guest to try again later or keep waiting,
+// and the moment someone goes back online the queue they already have rings
+// them straight away. Remembered per browser tab (sessionStorage, like the
+// sign-in itself) so a refresh doesn't silently flip a busy agent to online.
+const STATUS_STORAGE_KEY = 'vfd_agent_status';
+let agentStatus = 'online';
+try { if (sessionStorage.getItem(STATUS_STORAGE_KEY) === 'busy') agentStatus = 'busy'; } catch { /* ignore */ }
+
+function updateStatusButton() {
+  const btn = document.getElementById('btn-status');
+  if (!btn) return;
+  const busy = agentStatus === 'busy';
+  btn.classList.toggle('busy', busy);
+  btn.querySelector('.status-label').textContent = busy ? 'Busy' : 'Online';
+  btn.title = busy
+    ? "You're set to Busy — no ring or pop-up for new calls. Click to go Online."
+    : "You're Online and will be notified of new calls. Click to set yourself Busy.";
+  btn.setAttribute('aria-pressed', busy ? 'true' : 'false');
+}
+
+function setAgentStatus(status) {
+  agentStatus = status === 'busy' ? 'busy' : 'online';
+  try { sessionStorage.setItem(STATUS_STORAGE_KEY, agentStatus); } catch { /* ignore */ }
+  updateStatusButton();
+  wsSend({ type: 'set-status', status: agentStatus });
+  updateRingingState();   // going online with guests already waiting rings immediately
+  updateIncomingToast();
+}
+
 function startRinging() {
   if (ringActive || ringMuted) return;
   ringActive = true;
@@ -247,7 +280,7 @@ function stopRinging() {
 
 /** Call after anything that could change whether we should be ringing: a queue update, answering a call, or a call ending. */
 function updateRingingState() {
-  if (lastQueueLength > 0 && !currentCallId && !ringMuted) {
+  if (lastQueueLength > 0 && !currentCallId && !ringMuted && agentStatus === 'online') {
     startRinging();
   } else {
     stopRinging();
@@ -271,7 +304,7 @@ function updateIncomingToast() {
   const toast = document.getElementById('incoming-call-toast');
   const head = lastQueueSnapshot[0];
 
-  if (!head || currentCallId || head.callId === toastDismissedCallId) {
+  if (!head || currentCallId || agentStatus === 'busy' || head.callId === toastDismissedCallId) {
     toast.classList.add('hidden');
     return;
   }
@@ -478,6 +511,10 @@ function handleServerMessage(msg) {
       setConnectionStatus('connected');
       sessionStorage.setItem(STORAGE_KEY, lastLoginPassword);
       document.getElementById('agent-name-label').textContent = msg.name;
+      // The server starts every connection as online — re-assert a Busy
+      // choice made before a refresh/reconnect.
+      updateStatusButton();
+      if (agentStatus === 'busy') wsSend({ type: 'set-status', status: 'busy' });
       showScreen('screen-dashboard');
       wsSend({ type: 'get-log' });
       wsSend({ type: 'get-chats' });
@@ -1289,6 +1326,10 @@ function updateRingToggleButton() {
   btn.classList.toggle('muted', ringMuted);
 }
 updateRingToggleButton();
+
+document.getElementById('btn-status').addEventListener('click', () => {
+  setAgentStatus(agentStatus === 'busy' ? 'online' : 'busy');
+});
 
 document.getElementById('btn-toggle-ring').addEventListener('click', () => {
   ringMuted = !ringMuted;

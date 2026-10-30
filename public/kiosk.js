@@ -418,15 +418,26 @@ async function handleServerMessage(msg) {
       break;
 
     case 'queued':
+      swallowNextCallEnded = false;
       currentCallId = msg.callId;
       document.getElementById('waiting-title').textContent = 'Connecting you to the next available agent…';
+      hideBusyPrompt();
       showScreen('screen-waiting');
       document.getElementById('waiting-topic').textContent = currentTopic;
       waitStartedAt = Date.now();
       startWaitTimer();
       break;
 
+    case 'agents-busy':
+      showBusyPrompt();
+      break;
+
+    case 'agents-available':
+      hideBusyPrompt();
+      break;
+
     case 'call-accepted':
+      hideBusyPrompt();
       currentAgentName = msg.agentName;
       document.getElementById('call-agent-name').textContent = `${msg.agentName} · ${currentTopic}`;
       stopWaitTimer();
@@ -457,6 +468,7 @@ async function handleServerMessage(msg) {
     case 'call-transferring':
       stopCallTimer();
       teardownPeerConnectionOnly();
+      hideBusyPrompt();
       document.getElementById('waiting-title').textContent = 'Connecting you to another agent…';
       document.getElementById('waiting-topic').textContent = currentTopic;
       waitStartedAt = Date.now();
@@ -465,6 +477,7 @@ async function handleServerMessage(msg) {
       break;
 
     case 'call-ended':
+      if (swallowNextCallEnded) { swallowNextCallEnded = false; break; }
       const reasonText = {
         'agent-ended': 'The agent ended the call.',
         'agent-disconnected': 'The agent lost connection. Please try again.',
@@ -798,7 +811,26 @@ function formatTime(ms) {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
+// ---- "All agents are busy" prompt -----------------------------------------
+// The server sends 'agents-busy' when no signed-in agent is set to Online
+// for this guest's call, and 'agents-available' when one is again. The
+// prompt swaps in for the normal waiting content; "Keep waiting" just puts
+// that content back (the call stays queued and keeps ringing for agents),
+// "End call" cancels like the normal Cancel button. If it becomes available
+// while the prompt is still up, it clears itself — the agent already got
+// the ring, so the guest shouldn't sit looking at a stale "busy" message.
+function showBusyPrompt() {
+  if (!screens['screen-waiting'].classList.contains('active')) return;
+  document.getElementById('waiting-main').classList.add('hidden');
+  document.getElementById('waiting-busy').classList.remove('hidden');
+}
+function hideBusyPrompt() {
+  document.getElementById('waiting-busy').classList.add('hidden');
+  document.getElementById('waiting-main').classList.remove('hidden');
+}
+
 function cleanupCall() {
+  hideBusyPrompt();
   stopWaitTimer();
   stopCallTimer();
   clearTimeout(connectTimeoutHandle);
@@ -894,6 +926,22 @@ document.getElementById('btn-cancel-waiting').addEventListener('click', () => {
   cleanupCall();
   resetToIdle();
 });
+
+// Ending the call from the busy prompt goes straight back to idle. The server
+// answers a cancelled wait with a 'call-ended', which would otherwise land the
+// guest on the "We hope we could help" / rate-your-call screen for a call that
+// never connected — so that one reply is swallowed (flag cleared on the next
+// 'queued' too, so it can never eat a later call's real ending).
+let swallowNextCallEnded = false;
+document.getElementById('btn-busy-end').addEventListener('click', () => {
+  swallowNextCallEnded = true;
+  wsSend({ type: 'cancel-wait' });
+  cleanupCall();
+  currentCallId = null;
+  resetToIdle();
+});
+
+document.getElementById('btn-busy-wait').addEventListener('click', hideBusyPrompt);
 
 document.getElementById('btn-hangup').addEventListener('click', () => {
   // The guest hung up on a call that had actually connected (this button

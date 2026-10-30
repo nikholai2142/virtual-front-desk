@@ -42,6 +42,11 @@
         </div>
       </div>
       <div class="topbar-right">
+        <!-- Online / Busy availability. Busy = no ring or pop-up for new calls;
+             if every agent is busy the kiosk tells the guest. See agent.js. -->
+        <button id="btn-status" class="status-toggle" type="button" aria-pressed="false">
+          <span class="status-toggle-dot"></span><span class="status-label">Online</span>
+        </button>
         <span id="wake-lock-indicator" class="wake-lock-indicator hidden" title="Keeping this screen awake so you don't miss a call">☀</span>
         <!-- Only shown (via JS) in browsers that support HTMLMediaElement.setSinkId
              (Chrome/Edge/Firefox — not Safari). Lets an agent with more than one

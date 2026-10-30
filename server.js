@@ -829,6 +829,41 @@ function broadcastQueue() {
       }));
     a.send({ type: 'queue-update', queue: snapshot });
   }
+  syncBusyNotices();
+}
+
+/**
+ * Whether the agent on `conn` has set themselves "online" (ready to take
+ * calls) rather than "busy". Set by the agent's own Online/Busy toggle
+ * (see the 'set-status' message below); a fresh sign-in is always online.
+ * This is a manual status — it says nothing about whether the agent is
+ * currently on a call.
+ */
+function isOnline(conn) {
+  return conn.status !== 'busy';
+}
+
+/**
+ * Tells each waiting guest whether anyone could actually answer them right
+ * now: at least one signed-in agent who is set to online AND would be shown
+ * this call (same language rule as the queue itself). If not, the kiosk
+ * shows its "all agents are busy" prompt. Only sends on a CHANGE (tracked
+ * as call.busyNotified) so a queue refresh doesn't re-pop a prompt the
+ * guest already dismissed with "Keep waiting".
+ *
+ * "Nobody signed in at all" counts as busy too — the guest would otherwise
+ * sit on a ring that no one can possibly answer.
+ */
+function syncBusyNotices() {
+  for (const callId of queue) {
+    const call = calls.get(callId);
+    if (!call || !call.guestConn || !call.guestConn.alive) continue;
+    const someoneAvailable = [...agentConns].some((a) => isOnline(a) && queueVisibleTo(call, a));
+    const nowBusy = !someoneAvailable;
+    if (nowBusy === !!call.busyNotified) continue;
+    call.busyNotified = nowBusy;
+    call.guestConn.send({ type: nowBusy ? 'agents-busy' : 'agents-available' });
+  }
 }
 
 function removeFromQueue(callId) {
@@ -1045,6 +1080,7 @@ function transferCall(callId, { note, language, fromAgentName }) {
   // Unshift, not push — this guest already waited once; a transfer isn't
   // supposed to send them back to the end of the line.
   queue.unshift(callId);
+  call.busyNotified = false; // fresh wait — syncBusyNotices() re-evaluates it from scratch
 
   if (call.guestConn && call.guestConn.alive) {
     call.guestConn.send({ type: 'call-transferring' });
@@ -2716,6 +2752,7 @@ function handleAgentConnection(conn) {
       agentName = match.name;
       agentId = match.id;
       conn.agentId = agentId; // readable from outside this closure — see agentLanguages()/broadcastQueue()
+      conn.status = 'online'; // a fresh sign-in is always online; agent.js re-sends 'busy' if they'd chosen it before a refresh
       agentConns.add(conn);
       conn.send({ type: 'agent-login-ok', name: agentName });
       broadcastQueue();
@@ -2723,6 +2760,16 @@ function handleAgentConnection(conn) {
     }
 
     if (!agentName) return; // must log in first
+
+    if (msg.type === 'set-status') {
+      conn.status = msg.status === 'busy' ? 'busy' : 'online';
+      conn.send({ type: 'status-updated', status: conn.status });
+      // A waiting guest may now have (or lose) someone available — this
+      // is also what makes a newly-online agent's ring start immediately,
+      // since the queue itself was never hidden from them.
+      syncBusyNotices();
+      return;
+    }
 
     if (msg.type === 'change-password') {
       const agent = AGENTS.find((a) => a.id === agentId);
@@ -2897,6 +2944,7 @@ function handleAgentConnection(conn) {
     for (const [callId, call] of calls) {
       if (call.agentConn === conn) endCall(callId, 'agent-disconnected');
     }
+    syncBusyNotices(); // the last online agent leaving means waiting guests are now "all busy"
   };
 }
 

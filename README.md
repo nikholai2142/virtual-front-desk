@@ -550,6 +550,40 @@ them until they unlock it and the page catches back up.
   stays plugged in and unlocked at the desk, same as a physical phone
   system would.
 
+## Agent status — Online / Busy
+
+Each agent has an **Online / Busy** toggle in the top bar of the agent
+dashboard (next to the settings gear). Click it to flip.
+
+- **Online** (the default on every sign-in): rings and shows the floating
+  pop-up for new calls, as before.
+- **Busy**: no ring tone and no pop-up for new calls — for stepping away or
+  helping someone in person. The queue is still listed in the sidebar, so
+  you can see (and manually answer) a waiting guest if you choose to.
+- The choice survives a page refresh in the same browser tab (it's kept for
+  the session, like the sign-in) but resets to Online on a fresh sign-in.
+- When you go back **Online** while guests are waiting, the ring and pop-up
+  start immediately.
+
+**What the guest sees.** If *no* signed-in agent is set to Online (and able
+to take the guest's language — same rule as the queue), the kiosk's waiting
+screen is replaced by **"All available agents are currently busy"** with two
+buttons:
+
+- **End call** — cancels and returns the kiosk to its start screen.
+- **Keep waiting** — dismisses the message; the call stays queued and keeps
+  ringing. It comes back only if the situation changes (someone goes
+  Online and then everyone is busy again).
+
+If an agent goes Online while the message is up, it clears itself and that
+agent gets the call notification straight away. A guest who places a call
+when everyone is already busy sees the message immediately.
+
+Notes: "Busy" is a manual status — an agent who is simply on a call is not
+treated as busy for this message (the guest keeps the normal waiting
+screen). If *nobody at all* is signed in, the guest sees the same busy
+message rather than ringing into nothing.
+
 ## Call hold
 
 An agent can put an active call on hold from the **⏸ Hold** button next

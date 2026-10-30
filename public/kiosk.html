@@ -79,11 +79,24 @@
        the 'call-transferring' server message) -->
   <section id="screen-waiting" class="screen">
     <div class="center-card">
-      <div class="spinner" aria-hidden="true"></div>
-      <h2 id="waiting-title">Connecting you to the next available agent…</h2>
-      <p class="sub"><span id="waiting-topic"></span> · waiting <span id="waiting-time">0:00</span></p>
-      <p id="waiting-warning" class="warning hidden">This is taking longer than usual. You're welcome to keep waiting, or dial <strong>0</strong> from a house phone.</p>
-      <button id="btn-cancel-waiting" class="btn btn-ghost">Cancel</button>
+      <div id="waiting-main">
+        <div class="spinner" aria-hidden="true"></div>
+        <h2 id="waiting-title">Connecting you to the next available agent…</h2>
+        <p class="sub"><span id="waiting-topic"></span> · waiting <span id="waiting-time">0:00</span></p>
+        <p id="waiting-warning" class="warning hidden">This is taking longer than usual. You're welcome to keep waiting, or dial <strong>0</strong> from a house phone.</p>
+        <button id="btn-cancel-waiting" class="btn btn-ghost">Cancel</button>
+      </div>
+      <!-- Shown instead of the above while every signed-in agent is set to Busy
+           (server sends 'agents-busy' / 'agents-available' — see kiosk.js). -->
+      <div id="waiting-busy" class="hidden" role="alert">
+        <div class="busy-icon" aria-hidden="true">⏳</div>
+        <h2>All available agents are currently busy</h2>
+        <p class="sub">Please try again later, or keep waiting and we'll connect you as soon as an agent is free.</p>
+        <div class="busy-actions">
+          <button id="btn-busy-end" class="btn btn-ghost">End call</button>
+          <button id="btn-busy-wait" class="btn btn-primary">Keep waiting</button>
+        </div>
+      </div>
     </div>
   </section>
 
