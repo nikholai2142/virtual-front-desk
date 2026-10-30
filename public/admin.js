@@ -892,7 +892,7 @@ document.getElementById('btn-export-perf-pdf').addEventListener('click', () => {
   });
 });
 
-const AGENT_DETAIL_EXPORT_HEADER = ['Date', 'Topic', 'Kiosk', 'Duration', 'Hold Time', 'Notes', 'Rating', 'Rating Guest', 'Rating Remarks', 'Recording'];
+const AGENT_DETAIL_EXPORT_HEADER = ['Date', 'Topic', 'Kiosk', 'Duration', 'Hold Time', 'Notes', 'Rating', 'Rating Guest', 'Rating Remarks'];
 
 /** One export row per call, for whichever agent's detail modal is currently open — matches exactly what's listed in the modal's call history. */
 function agentDetailExportRows() {
@@ -908,7 +908,7 @@ function agentDetailExportRows() {
       c.rating ? c.rating.stars : '',
       c.rating?.guestName || '',
       c.rating?.remarks || '',
-      c.recording ? (c.recording.missing ? 'No longer available' : c.recording.url) : '',
+      // Deliberately no recording link — recordings stay in the dashboard only, not in exported reports.
     ];
   });
 }

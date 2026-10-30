@@ -820,8 +820,9 @@ in the selected range shows a row with **0 calls** rather than disappearing.
 - **The same two buttons inside an agent's detail view** (click their row
   or a bar to open it) instead export that one agent's **full call
   history** — one row per call (date, kiosk, duration, hold time, agent
-  notes, rating, and the recording link where one exists) — also scoped to
-  the currently selected date range.
+  notes, and the guest's rating and remarks) — also scoped to the currently
+  selected date range. Recording links are deliberately left out of both
+  the CSV and the PDF; recordings stay in the dashboard only.
 - Either CSV downloads straight to your computer, ready for a spreadsheet.
   Either PDF opens a plain, print-formatted report in a new tab and invokes
   your browser's print dialog, where **"Save as PDF" is a built-in
