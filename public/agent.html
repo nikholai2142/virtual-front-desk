@@ -198,12 +198,16 @@
     <div class="incoming-toast-icon">📞</div>
     <div class="incoming-toast-body">
       <div class="incoming-toast-title">Incoming call</div>
+      <div id="ict-kiosk-badge" class="incoming-toast-kiosk-badge">
+        <svg class="itkb-pin" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7Z" fill="currentColor"/><circle cx="12" cy="9" r="2.5" fill="var(--panel-2)"/></svg>
+        <span id="ict-kiosk"></span>
+      </div>
       <div class="incoming-toast-meta">
         <strong id="ict-topic">—</strong>
         <span id="ict-lang" class="qi-lang"></span>
       </div>
       <div class="incoming-toast-sub">
-        <span id="ict-kiosk"></span><span id="ict-wait"></span>
+        <span id="ict-wait"></span>
       </div>
       <div id="ict-transfer-note" class="qi-transfer-note hidden"></div>
       <div id="ict-more" class="incoming-toast-more hidden"></div>

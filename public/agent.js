@@ -279,6 +279,7 @@ function updateIncomingToast() {
   document.getElementById('ict-topic').textContent = head.topic;
   document.getElementById('ict-lang').textContent = head.languageLabel || '';
   document.getElementById('ict-kiosk').textContent = head.kioskId || '';
+  document.getElementById('ict-kiosk-badge').classList.toggle('hidden', !head.kioskId);
   document.getElementById('ict-wait').dataset.queuedAt = head.queuedAt;
   updateIncomingToastWait();
 
@@ -310,7 +311,7 @@ function updateIncomingToastWait() {
   const el = document.getElementById('ict-wait');
   if (!el.dataset.queuedAt) return;
   const s = Math.floor((Date.now() - Number(el.dataset.queuedAt)) / 1000);
-  el.textContent = ` · waiting ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  el.textContent = `waiting ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 // sessionStorage (not localStorage): survives a page refresh, but clears

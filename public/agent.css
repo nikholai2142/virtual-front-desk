@@ -337,7 +337,14 @@ html, body {
   color: var(--accent); font-size: 11px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;
 }
-.incoming-toast-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 17px; }
+.incoming-toast-kiosk-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: #8b5cf6; color: #fff; border-radius: 10px;
+  padding: 7px 13px; margin-bottom: 10px;
+  font-size: 17px; font-weight: 800; letter-spacing: 0.2px;
+}
+.incoming-toast-kiosk-badge .itkb-pin { flex-shrink: 0; }
+.incoming-toast-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; color: var(--text); }
 .incoming-toast-meta strong { font-weight: 700; }
 .incoming-toast .qi-lang {
   color: var(--sub); font-size: 11px; font-weight: 600;
@@ -381,7 +388,8 @@ html, body {
 
 @media (max-width: 480px) {
   .incoming-toast { top: 62px; padding: 14px; }
-  .incoming-toast-meta { font-size: 15px; }
+  .incoming-toast-kiosk-badge { font-size: 15px; padding: 6px 11px; }
+  .incoming-toast-meta { font-size: 13px; }
 }
 
 /* ============================================================

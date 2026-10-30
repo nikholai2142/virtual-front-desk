@@ -437,6 +437,13 @@ kiosk, language, and how long the guest has been waiting, with its own
 **Answer** button — right there, so you don't have to hunt through the
 sidebar list to respond.
 
+- The **kiosk name is the pop-up's most prominent element** — a solid,
+  colored badge with a location-pin icon, sitting right under the
+  "Incoming call" label. On a property with more than one kiosk, that's
+  the thing an agent actually needs to see at a glance; "Front Desk" (the
+  one remaining department/topic — see "What changed" above) never
+  varies between kiosks, so it sits in a smaller secondary line below the
+  badge, next to the language and wait time.
 - It's pinned to the screen, not the Calls tab, so it still shows even if
   you're on the **Chats** tab when a call comes in (the sidebar queue list
   isn't visible from there at all). Clicking **Answer** on it jumps you
