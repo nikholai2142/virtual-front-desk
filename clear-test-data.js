@@ -60,6 +60,7 @@ async function main() {
       console.log(
         `Upstash Redis: would delete ${counts.callLog} call log entr${counts.callLog === 1 ? 'y' : 'ies'}, ` +
           `${counts.missedCalls} missed call${counts.missedCalls === 1 ? '' : 's'}, ` +
+          `${counts.busyEntries} busy-time entr${counts.busyEntries === 1 ? 'y' : 'ies'}, ` +
           `${counts.chats} chat conversation${counts.chats === 1 ? '' : 's'}, ` +
           `${counts.ratings} rating${counts.ratings === 1 ? '' : 's'}.`
       );
@@ -72,6 +73,7 @@ async function main() {
       console.log(
         `Upstash Redis: deleted ${result.callLog} call log entr${result.callLog === 1 ? 'y' : 'ies'}, ` +
           `${result.missedCalls} missed call${result.missedCalls === 1 ? '' : 's'}, ` +
+          `${result.busyEntries} busy-time entr${result.busyEntries === 1 ? 'y' : 'ies'}, ` +
           `${result.chats} chat conversation${result.chats === 1 ? '' : 's'}, ` +
           `${result.ratings} rating${result.ratings === 1 ? '' : 's'}.`
       );

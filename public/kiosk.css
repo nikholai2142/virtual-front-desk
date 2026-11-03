@@ -473,3 +473,58 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 .busy-icon { font-size: 44px; line-height: 1; margin-bottom: 10px; }
 .busy-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
 .busy-actions .btn { min-width: 150px; }
+
+/* ---- Agent card (agent's camera is off) ----
+   Replaces the agent's video with a branded card: their avatar, name, and a
+   "voice only" bar. Below .call-topbar / .rec-notice / .call-controls /
+   #local-video in stacking order (it comes before them in the markup), so
+   all of those stay on top. See updateAgentCard() in kiosk.js. */
+.agent-card-wrap {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 130px 24px 120px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  overflow: hidden;
+}
+.agent-card-wrap::before, .agent-card-wrap::after {
+  content: ''; position: absolute; border-radius: 50%; background: rgba(255, 255, 255, 0.06); pointer-events: none;
+}
+.agent-card-wrap::before { width: 460px; height: 460px; right: -140px; top: -140px; }
+.agent-card-wrap::after { width: 420px; height: 420px; left: -100px; bottom: -160px; background: rgba(255, 255, 255, 0.05); }
+.agent-card-wrap.hidden { display: none !important; }
+.agent-card {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 44px;
+  width: 100%; max-width: 760px;
+  background: #ffffff; color: var(--text);
+  border-radius: 24px; padding: 40px 48px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+.agent-card-avatar { flex-shrink: 0; border-radius: 50%; box-shadow: 0 0 0 6px #e3e5ff; line-height: 0; }
+.agent-card-text { min-width: 0; flex: 1; }
+.agent-card-eyebrow { font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.agent-card-name { font-size: 52px; font-weight: 800; line-height: 1.05; margin-top: 6px; overflow-wrap: anywhere; }
+.agent-card-role { font-size: 18px; color: var(--sub); margin-top: 6px; }
+.agent-card-voice {
+  margin-top: 26px; display: inline-flex; align-items: center; gap: 14px;
+  background: var(--accent); color: #ffffff; border-radius: 14px; padding: 12px 18px;
+  font-size: 16px; font-weight: 700;
+}
+.agent-card-bars { display: flex; align-items: center; gap: 4px; height: 28px; }
+.agent-card-bars i {
+  width: 6px; height: 28px; border-radius: 3px; background: #ffffff; transform-origin: center;
+  animation: agent-card-bar 1s ease-in-out infinite;
+}
+.agent-card-bars i:nth-child(2) { animation-delay: .15s; }
+.agent-card-bars i:nth-child(3) { animation-delay: .3s; }
+.agent-card-bars i:nth-child(4) { animation-delay: .45s; }
+.agent-card-bars i:nth-child(5) { animation-delay: .6s; }
+@keyframes agent-card-bar { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .agent-card-bars i { animation: none; transform: scaleY(.7); } }
+/* Portrait kiosks / narrow screens: stack the avatar above the text. */
+@media (max-width: 760px), (orientation: portrait) {
+  .agent-card-wrap { padding: 120px 20px 215px; }
+  .agent-card { flex-direction: column; text-align: center; gap: 24px; padding: 32px 24px; }
+  .agent-card-name { font-size: 40px; }
+  .agent-card-voice { margin-top: 20px; text-align: left; }
+}

@@ -579,10 +579,63 @@ If an agent goes Online while the message is up, it clears itself and that
 agent gets the call notification straight away. A guest who places a call
 when everyone is already busy sees the message immediately.
 
+**Busy time per day (admin).** The admin dashboard's **Agent Performance**
+page has a **Busy time per day** table: one row per day, one column per
+agent (plus an "All agents" total), showing how long each agent was set to
+Busy that day. It follows the page's date range, lists only days with some
+busy time, and has its own **Export CSV / Export PDF**.
+
+- Only time while the agent is signed in counts — a Busy stretch ends when
+  they go back Online *or* sign out / lose their connection. (A refresh
+  reconnects within seconds and carries the Busy setting over.)
+- Days are cut at midnight in the **admin's browser timezone**, and a stretch
+  that spans midnight is split across both days.
+- If the same agent is signed in on two devices and both are Busy, that time
+  is counted once, not twice.
+- Like call history, this is kept in memory only unless persistent storage
+  (Upstash Redis) is set up — see "Persistent storage" below — in which case
+  it survives restarts. A server restart in the middle of someone's Busy
+  stretch loses that one unfinished stretch. `clear-test-data.js` clears it
+  along with the other test history.
+
 Notes: "Busy" is a manual status — an agent who is simply on a call is not
 treated as busy for this message (the guest keeps the normal waiting
 screen). If *nobody at all* is signed in, the guest sees the same busy
 message rather than ringing into nothing.
+
+## Agent avatars (camera-off call card)
+
+When an agent's camera is off — or their device has no camera at all — the
+guest's kiosk swaps the agent's video for a **branded call card**: the agent's
+avatar, their name ("You're connected with …", "Customer Service"), and a
+"Voice only — <name>'s camera is off" bar. The recording notice, timer,
+controls and the guest's own preview stay on top. The card disappears the
+moment the camera comes back on.
+
+**Choosing an avatar.** Agents click their round avatar in the dashboard's top
+bar. Four tabs:
+
+- **Presets** — 8 ready-made characters.
+- **Customize** — Hair (7 styles + 8 colours), Face (6 skin tones, mustache /
+  beard), Gear (eyewear; headgear: headset, cap, beanie, **songkok**,
+  **hijab**, and festive Santa hat / reindeer antlers / party hat) and Outfit
+  (shirt + background colour). Cap, beanie, songkok and hijab have their own
+  colour picker. Randomize and Reset are there too.
+- **Photo** — upload a photo; it is cropped to a circle and shrunk to 256 px in
+  the browser before saving.
+- **Initial** — the first letter of their name on a colour.
+
+Changes show on the kiosk straight away, even mid-call. An agent with no
+avatar chosen shows as their initial on periwinkle.
+
+**Implementation notes.** The avatar is a small JSON spec saved on the agent's
+record (`avatar` in `agents.json` / Redis, same as the rest of the roster).
+`public/avatar.js` draws it (shared by the dashboard and the kiosk);
+`public/avatar-editor.js` is the picker. The server validates every spec
+(`sanitizeAvatar` in `server.js`) against the same option lists — add a new
+option in both places. If an agent's browser can't open a camera it falls back
+to audio-only and tells the server (`camera-state`), which relays it to the
+kiosk (`agent-camera`).
 
 ## Call hold
 

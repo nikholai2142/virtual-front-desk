@@ -273,6 +273,8 @@ loadCallConfig();
 // ---- Post-call rating ----
 let currentCallId = null;
 let currentAgentName = null;
+let currentAgentAvatar = null; // the agent's avatar spec (see avatar.js), shown on the call card while their camera is off
+let agentCameraOn = true;
 let selectedStars = 0;
 let endedResetHandle = null;
 
@@ -439,12 +441,26 @@ async function handleServerMessage(msg) {
     case 'call-accepted':
       hideBusyPrompt();
       currentAgentName = msg.agentName;
+      currentAgentAvatar = msg.avatar || null;
+      agentCameraOn = msg.cameraOn !== false;
+      updateAgentCard();
       document.getElementById('call-agent-name').textContent = `${msg.agentName} · ${currentTopic}`;
       stopWaitTimer();
       await startPeerConnection();
       showScreen('screen-call');
       callStartedAt = Date.now();
       startCallTimer();
+      break;
+
+    // The agent turned their camera off/on, or changed their avatar mid-call.
+    case 'agent-camera':
+      agentCameraOn = !!msg.on;
+      updateAgentCard();
+      break;
+
+    case 'agent-avatar':
+      currentAgentAvatar = msg.avatar || null;
+      updateAgentCard();
       break;
 
     case 'signal':
@@ -594,6 +610,22 @@ async function handleSignal(signalType, data) {
  * peer connection, the moment it actually reaches 'connected' — see
  * pc.onconnectionstatechange below.
  */
+/**
+ * Shows the branded call card (agent avatar + name + "voice only") over the
+ * video while the agent's camera is off, and hides it when it's back on or
+ * there's no agent (call ended / transferring).
+ */
+function updateAgentCard() {
+  const wrap = document.getElementById('agent-card-wrap');
+  const show = !!currentAgentName && !agentCameraOn;
+  wrap.classList.toggle('hidden', !show);
+  if (!show) return;
+  const name = currentAgentName;
+  document.getElementById('agent-card-avatar').innerHTML = VFDAvatar.html(currentAgentAvatar, { size: 220, talking: true, name });
+  document.getElementById('agent-card-name').textContent = name;
+  document.getElementById('agent-card-voice-text').textContent = `Voice only — ${name}'s camera is off`;
+}
+
 function showConnectedNotice(agentName, topic) {
   const name = agentName || 'your agent';
   const initial = name.trim().charAt(0).toUpperCase() || '?';
@@ -838,6 +870,8 @@ function cleanupCall() {
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   micOn = true; camOn = true;
+  currentAgentAvatar = null; agentCameraOn = true; // (currentAgentName stays — the rating prompt names the agent)
+  document.getElementById('agent-card-wrap').classList.add('hidden');
   document.getElementById('hold-overlay').classList.add('hidden');
   hideConnectedNotice();
 }
@@ -855,6 +889,8 @@ function teardownPeerConnectionOnly() {
   pendingIceCandidates = [];
   if (pc) { pc.close(); pc = null; }
   document.getElementById('hold-overlay').classList.add('hidden');
+  currentAgentAvatar = null; agentCameraOn = true; // (currentAgentName stays — the rating prompt names the agent)
+  document.getElementById('agent-card-wrap').classList.add('hidden');
   hideConnectedNotice(); // the outgoing agent's notice shouldn't linger into the transfer wait
 }
 

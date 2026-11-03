@@ -31,8 +31,8 @@
       <!-- Your logo — replace public/branding/logo.svg with your own (see
            README's "Customizing the kiosk's branding" section) -->
       <img class="brand-mark" src="branding/logo.svg" alt="" />
-      <h1>Need help?</h1>
-      <p class="sub">Tap below to start a video call with our Front Desk team.</p>
+      <h1>How may I assist you?</h1>
+      <p class="sub">Tap below to start a video call with our Customer Service team.</p>
     </div>
     <button id="btn-start-call" class="start-call-btn" data-topic="Front Desk">
       <!-- Replace public/branding/start-icon.svg to change this icon -->
@@ -104,6 +104,24 @@
   <section id="screen-call" class="screen">
     <div class="call-wrap">
       <video id="remote-video" autoplay playsinline></video>
+      <!-- Branded call card — replaces the agent's video while their camera is
+           off (or they have none): their avatar, name, and a "voice only" bar.
+           Sits below the top bar / controls / self-view in stacking order. See
+           updateAgentCard() in kiosk.js. -->
+      <div id="agent-card-wrap" class="agent-card-wrap hidden">
+        <div class="agent-card">
+          <div id="agent-card-avatar" class="agent-card-avatar"></div>
+          <div class="agent-card-text">
+            <div class="agent-card-eyebrow">You're connected with</div>
+            <div id="agent-card-name" class="agent-card-name"></div>
+            <div class="agent-card-role">Customer Service</div>
+            <div class="agent-card-voice" role="status">
+              <span class="agent-card-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <span id="agent-card-voice-text"></span>
+            </div>
+          </div>
+        </div>
+      </div>
       <video id="local-video" autoplay playsinline muted></video>
       <div class="call-topbar">
         <span id="call-agent-name">Connecting…</span>
@@ -214,6 +232,7 @@
     </form>
   </div>
 
+  <script src="avatar.js"></script>
   <script src="kiosk.js"></script>
 </body>
 </html>

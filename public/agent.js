@@ -40,6 +40,9 @@ let callTimerHandle = null;
 let noteDebounce = null;
 let micOn = true;
 let camOn = true;
+let agentHasCamera = true; // false when this device has no camera (or it was blocked) — the call runs audio-only and the guest sees the avatar card
+let myAvatar = null; // this agent's saved avatar spec, see avatar.js
+let myName = '';
 let chatConversations = new Map(); // conversationId -> conversation
 let selectedChatId = null;
 let connectTimeoutHandle = null;
@@ -511,6 +514,9 @@ function handleServerMessage(msg) {
       setConnectionStatus('connected');
       sessionStorage.setItem(STORAGE_KEY, lastLoginPassword);
       document.getElementById('agent-name-label').textContent = msg.name;
+      myName = msg.name;
+      myAvatar = msg.avatar || null;
+      renderAvatarButton();
       // The server starts every connection as online — re-assert a Busy
       // choice made before a refresh/reconnect.
       updateStatusButton();
@@ -640,6 +646,16 @@ function handleServerMessage(msg) {
       errEl.classList.remove('hidden');
       break;
     }
+
+    case 'avatar-saved':
+      myAvatar = msg.avatar;
+      renderAvatarButton();
+      VFDAvatarEditor.saved();
+      break;
+
+    case 'avatar-save-failed':
+      VFDAvatarEditor.failed();
+      break;
 
     case 'change-password-ok': {
       const okEl = document.getElementById('change-password-success');
@@ -851,7 +867,7 @@ function resetHoldUI() {
   holdBtn.disabled = false;
   holdBtn.title = `Put call on hold (auto-resumes after ${formatMMSS(configuredMaxHoldSeconds)})`;
   document.getElementById('btn-toggle-mic').disabled = false;
-  document.getElementById('btn-toggle-cam').disabled = false;
+  document.getElementById('btn-toggle-cam').disabled = !agentHasCamera;
 }
 
 function tickHoldCountdown() {
@@ -949,14 +965,29 @@ async function startAsAnswerer() {
   refreshCallConfig();
 
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    agentHasCamera = true;
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (camErr) {
+      // No camera (or it's blocked) — take the call audio-only; the guest's
+      // kiosk shows this agent's avatar instead of video. A missing
+      // microphone is still fatal, so the outer catch handles that.
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      agentHasCamera = false;
+      camOn = false;
+    }
     document.getElementById('local-video').srcObject = localStream;
   } catch (err) {
-    alert('Camera/microphone access is required to take calls.');
+    alert('Microphone access is required to take calls.');
     wsSend({ type: 'end-call', callId: currentCallId });
     endActiveCallUI();
     return;
   }
+  const camBtn = document.getElementById('btn-toggle-cam');
+  camBtn.disabled = !agentHasCamera;
+  camBtn.classList.toggle('off', !camOn);
+  camBtn.title = agentHasCamera ? 'Camera on/off' : 'No camera found — guests see your avatar';
+  sendCameraState();
 
   const iceServers = await getIceServers();
   pc = new RTCPeerConnection({ iceServers });
@@ -1270,6 +1301,27 @@ document.getElementById('btn-toggle-cam').addEventListener('click', (e) => {
   camOn = !camOn;
   if (localStream) localStream.getVideoTracks().forEach((t) => (t.enabled = camOn));
   e.currentTarget.classList.toggle('off', !camOn);
+  sendCameraState();
+});
+
+/** Tells the server (and through it the guest's kiosk) whether the guest can currently see this agent's video. */
+function sendCameraState() {
+  if (currentCallId) wsSend({ type: 'camera-state', callId: currentCallId, on: !!(camOn && agentHasCamera) });
+}
+
+// ---- Avatar (shown on the kiosk when the camera is off) ----
+
+function renderAvatarButton() {
+  const btn = document.getElementById('btn-open-avatar');
+  if (btn && window.VFDAvatar) btn.innerHTML = VFDAvatar.html(myAvatar, { size: 28, animate: false, name: myName });
+}
+
+document.getElementById('btn-open-avatar').addEventListener('click', () => {
+  VFDAvatarEditor.open({
+    spec: myAvatar,
+    name: myName,
+    onSave: (spec) => wsSend({ type: 'set-avatar', avatar: spec }),
+  });
 });
 
 document.getElementById('btn-toggle-hold').addEventListener('click', (e) => {

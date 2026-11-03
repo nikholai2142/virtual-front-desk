@@ -57,6 +57,7 @@
         <select id="audio-output-select" class="audio-output-select hidden" title="Call audio output (ring tone + call audio)">
           <option value="">System default</option>
         </select>
+        <button id="btn-open-avatar" class="avatar-btn" type="button" title="Change your avatar" aria-label="Change your avatar"></button>
         <button id="btn-open-change-password" class="icon-btn" type="button" title="Change password">⚙</button>
         <button id="btn-sign-out" class="btn-small" type="button">Sign out</button>
         <span id="agent-status-dot" class="status-dot"></span>
@@ -234,6 +235,13 @@
        visuals. -->
   <audio id="ring-audio-sink" autoplay style="display:none"></audio>
 
+  <!-- AVATAR — what guests see on the kiosk when your camera is off. Built by avatar-editor.js. -->
+  <div id="avatar-modal" class="modal-overlay hidden">
+    <div id="avatar-card" class="modal-card avatar-card" role="dialog" aria-modal="true" aria-labelledby="avatar-title"></div>
+  </div>
+
+  <script src="avatar.js"></script>
+  <script src="avatar-editor.js"></script>
   <script src="agent.js"></script>
 </body>
 </html>

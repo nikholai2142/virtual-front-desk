@@ -1004,6 +1004,108 @@ document.getElementById('perf-filter-range').addEventListener('change', () => {
   document.getElementById(id).addEventListener('change', loadPerformanceStats);
 });
 
+// ---- Busy time per day -----------------------------------------------------
+// The server hands back each agent's busy stretches as plain intervals (see
+// /api/admin/stats/busy); the days are cut here, in the admin's own timezone.
+
+let lastBusyData = { agentNames: [], days: [] };
+
+/** "2h 05m" / "14m" / "40s" — compact, since a day's busy time is usually minutes to hours. */
+function formatBusyDuration(totalSeconds) {
+  const s = Math.round(totalSeconds);
+  if (s <= 0) return '—';
+  if (s < 60) return `${s}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h === 0) return `${m}m`;
+  return `${h}h ${String(m).padStart(2, '0')}m`;
+}
+
+/** Splits agents' busy stretches at local midnights into {agentNames, days:[{key,label,perAgent:{name:secs},total}]}, newest day first. */
+function bucketBusyByDay(agents) {
+  const dayMap = new Map(); // yyyy-mm-dd -> { key, date, perAgent: Map(agentName -> secs) }
+  const names = [];
+  agents.forEach((a) => {
+    if (!a.stretches.length) return;
+    if (!names.includes(a.agentName)) names.push(a.agentName);
+    a.stretches.forEach(({ startedAt, endedAt }) => {
+      let cursor = startedAt;
+      while (cursor < endedAt) {
+        const d = new Date(cursor);
+        const nextMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+        const sliceEnd = Math.min(endedAt, nextMidnight);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (!dayMap.has(key)) dayMap.set(key, { key, date: new Date(d.getFullYear(), d.getMonth(), d.getDate()), perAgent: new Map() });
+        const day = dayMap.get(key);
+        day.perAgent.set(a.agentName, (day.perAgent.get(a.agentName) || 0) + (sliceEnd - cursor) / 1000);
+        cursor = sliceEnd;
+      }
+    });
+  });
+  names.sort((x, y) => x.localeCompare(y));
+  const days = [...dayMap.values()]
+    .sort((x, y) => y.key.localeCompare(x.key))
+    .map((d) => {
+      const perAgent = {};
+      let total = 0;
+      names.forEach((n) => { const v = d.perAgent.get(n) || 0; perAgent[n] = v; total += v; });
+      return { key: d.key, label: d.date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }), perAgent, total };
+    });
+  return { agentNames: names, days };
+}
+
+function renderBusyTable(data) {
+  const wrap = document.getElementById('busy-table-wrap');
+  if (!data.days.length) {
+    wrap.innerHTML = '<p class="empty-note">No busy time recorded in this range.</p>';
+    return;
+  }
+  const head = `<tr><th>Date</th>${data.agentNames.map((n) => `<th class="num">${escapeHtml(n)}</th>`).join('')}${data.agentNames.length > 1 ? '<th class="num">All agents</th>' : ''}</tr>`;
+  const body = data.days.map((d) =>
+    `<tr><td>${escapeHtml(d.label)}</td>${data.agentNames.map((n) => {
+      const v = d.perAgent[n];
+      return `<td class="num${v > 0 ? '' : ' zero'}">${formatBusyDuration(v)}</td>`;
+    }).join('')}${data.agentNames.length > 1 ? `<td class="num">${formatBusyDuration(d.total)}</td>` : ''}</tr>`
+  ).join('');
+  wrap.innerHTML = `<table class="busy-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function busyExportHeader() {
+  return ['Date', ...lastBusyData.agentNames, ...(lastBusyData.agentNames.length > 1 ? ['All agents'] : [])];
+}
+function busyExportRows() {
+  return lastBusyData.days.map((d) => [
+    d.key,
+    ...lastBusyData.agentNames.map((n) => formatBusyDuration(d.perAgent[n]).replace('—', '0m')),
+    ...(lastBusyData.agentNames.length > 1 ? [formatBusyDuration(d.total)] : []),
+  ]);
+}
+
+document.getElementById('btn-export-busy-csv').addEventListener('click', () => {
+  if (!lastBusyData.days.length) { alert('No busy time to export in this range.'); return; }
+  downloadCsv(`agent-busy-time-${exportDateStamp()}.csv`, busyExportHeader(), busyExportRows());
+});
+document.getElementById('btn-export-busy-pdf').addEventListener('click', () => {
+  if (!lastBusyData.days.length) { alert('No busy time to export in this range.'); return; }
+  exportPrintReport({
+    title: 'Agent Busy Time per Day',
+    subtitle: `Date range: ${lastPerfRangeLabel} · Generated ${new Date().toLocaleString()}`,
+    headerRow: busyExportHeader(),
+    dataRows: busyExportRows(),
+  });
+});
+
+async function loadBusyStats(params) {
+  try {
+    const data = await api(`/api/admin/stats/busy?${params.toString()}`);
+    lastBusyData = bucketBusyByDay(data.agents);
+    renderBusyTable(lastBusyData);
+  } catch (err) {
+    if (err.status === 401) return;
+    console.warn('Could not load agent busy-time stats:', err);
+  }
+}
+
 /** Agent Performance page: fetches the calls-handled/rating charts and the agent-details table for whatever date range perf-filter-range is currently set to (all-time by default). */
 async function loadPerformanceStats() {
   const { from, to } = resolvePerfDateRange();
@@ -1021,6 +1123,7 @@ async function loadPerformanceStats() {
     if (err.status === 401) return; // the next refreshAll() tick will handle bouncing back to sign-in
     console.warn('Could not load agent performance stats:', err);
   }
+  await loadBusyStats(params);
 }
 
 /** Fills the agent/kiosk filter <select>s from the endpoint's own filter option lists, preserving whatever the admin already had picked. */

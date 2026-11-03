@@ -41,6 +41,10 @@ const CALL_LOG_SAFETY_CAP = 50000;
 // assumes every call log entry was actually answered.
 const MISSED_CALL_LOG_KEY = 'vfd:missedcalls';
 const MISSED_CALL_LOG_SAFETY_CAP = 50000;
+// One entry per stretch an agent spent set to "Busy" (agentId, agentName,
+// startedAt, endedAt) — feeds the admin dashboard's "Busy time per day".
+const BUSY_LOG_KEY = 'vfd:busylog';
+const BUSY_LOG_SAFETY_CAP = 100000;
 
 // Updated by every Redis call; lets the admin dashboard show whether
 // persistence is actually working right now, not just whether it's set up.
@@ -352,6 +356,41 @@ async function appendMissedCallEntry(entry) {
   }
 }
 
+// ---- Agent "Busy" time -----------------------------------------------------
+
+/** Loads every persisted busy stretch. Returns [] if not configured/unreachable — same convention as loadCallLog. */
+async function loadBusyLog() {
+  if (!configured) return [];
+  try {
+    const raw = await redisCommand(['LRANGE', BUSY_LOG_KEY, '0', '-1']);
+    connected = true;
+    return (raw || [])
+      .map((s) => {
+        try { return JSON.parse(s); } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load busy-time history from Redis, starting empty:', err.message);
+    return [];
+  }
+}
+
+/** Appends one finished busy stretch. Returns true if it was actually saved. */
+async function appendBusyEntry(entry) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['RPUSH', BUSY_LOG_KEY, JSON.stringify(entry)]);
+    await redisCommand(['LTRIM', BUSY_LOG_KEY, String(-BUSY_LOG_SAFETY_CAP), '-1']);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save a busy-time entry to Redis — it will only exist in memory until the next restart:', err.message);
+    return false;
+  }
+}
+
 // ---- Chat conversations (WhatsApp / Messenger) ----------------------------
 // Each conversation is its own key, plus a set of conversation ids so we
 // can list them all — this avoids relying on Redis's HGETALL response
@@ -499,11 +538,12 @@ async function persistRating(rating) {
  * script show real numbers on a dry run without touching anything.
  */
 async function peekTestData() {
-  const counts = { callLog: 0, missedCalls: 0, chats: 0, ratings: 0 };
+  const counts = { callLog: 0, missedCalls: 0, busyEntries: 0, chats: 0, ratings: 0 };
   if (!configured) return { ...counts, configured: false };
   try {
     counts.callLog = (await redisCommand(['LLEN', CALL_LOG_KEY])) || 0;
     counts.missedCalls = (await redisCommand(['LLEN', MISSED_CALL_LOG_KEY])) || 0;
+    counts.busyEntries = (await redisCommand(['LLEN', BUSY_LOG_KEY])) || 0;
     counts.chats = ((await redisCommand(['SMEMBERS', CHAT_IDS_KEY])) || []).length;
     counts.ratings = ((await redisCommand(['SMEMBERS', RATING_IDS_KEY])) || []).length;
     connected = true;
@@ -526,11 +566,12 @@ async function peekTestData() {
 // them (configured: false / not reachable still reports accurate counts as
 // zero, same "never throws" convention as the rest of this file).
 async function clearTestData() {
-  const counts = { callLog: 0, missedCalls: 0, chats: 0, ratings: 0 };
+  const counts = { callLog: 0, missedCalls: 0, busyEntries: 0, chats: 0, ratings: 0 };
   if (!configured) return { ...counts, configured: false };
   try {
     counts.callLog = (await redisCommand(['LLEN', CALL_LOG_KEY])) || 0;
     counts.missedCalls = (await redisCommand(['LLEN', MISSED_CALL_LOG_KEY])) || 0;
+    counts.busyEntries = (await redisCommand(['LLEN', BUSY_LOG_KEY])) || 0;
     const chatIds = (await redisCommand(['SMEMBERS', CHAT_IDS_KEY])) || [];
     const ratingIds = (await redisCommand(['SMEMBERS', RATING_IDS_KEY])) || [];
     counts.chats = chatIds.length;
@@ -538,6 +579,7 @@ async function clearTestData() {
 
     await redisCommand(['DEL', CALL_LOG_KEY]);
     await redisCommand(['DEL', MISSED_CALL_LOG_KEY]);
+    await redisCommand(['DEL', BUSY_LOG_KEY]);
     for (const id of chatIds) await redisCommand(['DEL', chatKey(id)]);
     await redisCommand(['DEL', CHAT_IDS_KEY]);
     for (const id of ratingIds) await redisCommand(['DEL', ratingKey(id)]);
@@ -572,6 +614,8 @@ module.exports = {
   appendCallLogEntry,
   loadMissedCallLog,
   appendMissedCallEntry,
+  loadBusyLog,
+  appendBusyEntry,
   loadChats,
   persistChat,
   loadConfig,

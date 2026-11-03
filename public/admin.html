@@ -153,6 +153,18 @@
 
         <section class="panel panel-full">
           <div class="panel-head-row">
+            <h2>Busy time per day</h2>
+            <div class="export-btn-group">
+              <button type="button" id="btn-export-busy-csv" class="btn-small">Export CSV</button>
+              <button type="button" id="btn-export-busy-pdf" class="btn-small">Export PDF</button>
+            </div>
+          </div>
+          <p class="stats-hint">How long each agent was set to <strong>Busy</strong> on each day, for the date range selected above (days are in your browser's timezone). Only time while the agent was signed in counts, and a day with no busy time isn't listed.</p>
+          <div id="busy-table-wrap" class="busy-table-wrap"></div>
+        </section>
+
+        <section class="panel panel-full">
+          <div class="panel-head-row">
             <h2>Agent details</h2>
             <div class="export-btn-group">
               <button type="button" id="btn-export-perf-csv" class="btn-small">Export CSV</button>

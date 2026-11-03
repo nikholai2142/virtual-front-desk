@@ -384,3 +384,12 @@ html, body {
   display: inline-block; width: 9px; height: 9px; border-radius: 50%;
   margin-right: 5px; vertical-align: middle; border: 1px solid rgba(255,255,255,0.4);
 }
+
+/* Busy time per day (Agent Performance) */
+.busy-table-wrap { overflow-x: auto; }
+.busy-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.busy-table th, .busy-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.busy-table th { color: var(--sub); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.busy-table td.num, .busy-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.busy-table td.zero { color: var(--sub); }
+.busy-table tr.total-row td { font-weight: 700; border-top: 2px solid var(--border); }

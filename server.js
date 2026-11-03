@@ -73,6 +73,44 @@ function migrateAgentRecords(agents) {
   return { agents: migrated, changed };
 }
 
+// ---- Agent avatars -----------------------------------------------------
+// Shown on the kiosk's call card when an agent's camera is off (see
+// public/avatar.js, which renders these specs — keep the option lists in sync).
+const AVATAR_HAIR = ['short', 'swept', 'long', 'curly', 'bun', 'buzz', 'bald'];
+const AVATAR_EYES = ['none', 'round', 'square', 'shades'];
+const AVATAR_HEADS = ['none', 'headset', 'cap', 'beanie', 'songkok', 'hijab', 'santa', 'antlers', 'party'];
+const AVATAR_FACIALS = ['none', 'stache', 'beard'];
+const AVATAR_PRESETS = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8'];
+const MAX_AVATAR_PHOTO_CHARS = 200000;
+/** Returns a cleaned avatar spec, or null if the input isn't a valid one. Never trusts the client's shape. */
+function sanitizeAvatar(a) {
+  if (!a || typeof a !== 'object') return null;
+  const hex = (v, fallback) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : fallback);
+  const pick = (v, list, fallback) => (list.includes(v) ? v : fallback);
+  if (a.type === 'preset') return AVATAR_PRESETS.includes(a.id) ? { type: 'preset', id: a.id } : null;
+  if (a.type === 'initial') return { type: 'initial', bg: hex(a.bg, '#6c72ff') };
+  if (a.type === 'photo') {
+    if (typeof a.data !== 'string' || a.data.length > MAX_AVATAR_PHOTO_CHARS) return null;
+    return /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(a.data) ? { type: 'photo', data: a.data } : null;
+  }
+  if (a.type === 'custom') {
+    const skin = Number.isInteger(a.skin) && a.skin >= 0 && a.skin <= 5 ? a.skin : 2;
+    return {
+      type: 'custom',
+      hair: pick(a.hair, AVATAR_HAIR, 'short'),
+      hairColor: hex(a.hairColor, '#111111'),
+      skin,
+      eye: pick(a.eye, AVATAR_EYES, 'none'),
+      head: pick(a.head, AVATAR_HEADS, 'none'),
+      headColor: hex(a.headColor, '#111111'),
+      facial: pick(a.facial, AVATAR_FACIALS, 'none'),
+      shirt: hex(a.shirt, '#ffab15'),
+      bg: hex(a.bg, '#6c72ff'),
+    };
+  }
+  return null;
+}
+
 /** Saves the current AGENTS array. Returns true only if it actually reached persistent storage. */
 async function saveAgents() {
   try {
@@ -774,6 +812,32 @@ const callLog = [];
  * a zero.
  */
 const missedCallLog = [];
+
+/**
+ * Every finished stretch an agent spent set to "Busy" — {agentId, agentName,
+ * startedAt, endedAt} — for the admin dashboard's "Busy time per day". A
+ * stretch is closed (and appended here) when the agent goes back Online or
+ * their connection closes (sign-out, tab closed, dropped connection); a
+ * stretch still open right now lives on the connection as conn.busySince and
+ * is added at read time (see /api/admin/stats/busy). Busy time is only
+ * counted while the agent is actually signed in.
+ */
+const busyLog = [];
+const BUSY_LOG_LOCAL_ONLY_LIMIT = 20000; // same idea as LOCAL_ONLY_CALL_LOG_LIMIT: only trims when there's no Redis to hold the full history
+
+/** Closes `conn`'s open busy stretch (if any) and records it. Safe to call when the agent isn't busy. */
+function closeBusyStretch(conn) {
+  if (!conn.busySince) return;
+  const startedAt = conn.busySince;
+  conn.busySince = null;
+  const endedAt = Date.now();
+  if (endedAt - startedAt < 1000) return; // a mis-click, not a status
+  const agent = agentRecordFor(conn);
+  const entry = { agentId: conn.agentId, agentName: agent ? agent.name : 'Unknown', startedAt, endedAt };
+  busyLog.push(entry);
+  if (!store.configured && busyLog.length > BUSY_LOG_LOCAL_ONLY_LIMIT) busyLog.shift();
+  store.appendBusyEntry(entry).catch(() => {});
+}
 
 // ---- Agent password-reset requests ------------------------------------
 // An agent who forgot their password can request a reset from the login
@@ -2495,6 +2559,49 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // Busy time per agent. Returns each agent's busy stretches as plain
+  // {startedAt, endedAt} intervals, clipped to from/to — overlapping stretches
+  // for the same agent (signed in on two devices, both Busy) are merged so the
+  // same minute is never counted twice, and any stretch still open right now
+  // runs up to "now". The client splits them into days in the admin's own
+  // timezone (same reasoning as /stats/overview below — a server can't know
+  // which midnight the admin means).
+  if (urlObj.pathname === '/api/admin/stats/busy' && req.method === 'GET') {
+    const fromParam = urlObj.searchParams.get('from');
+    const toParam = urlObj.searchParams.get('to');
+    const from = fromParam ? Number(fromParam) : -Infinity;
+    const to = toParam ? Number(toParam) : Infinity;
+    const now = Date.now();
+    const all = busyLog.map((e) => ({ ...e }));
+    for (const conn of agentConns) {
+      if (conn.busySince) {
+        const rec = agentRecordFor(conn);
+        all.push({ agentId: conn.agentId, agentName: rec ? rec.name : 'Unknown', startedAt: conn.busySince, endedAt: now });
+      }
+    }
+    const byAgent = new Map();
+    for (const e of all) {
+      const startedAt = Math.max(e.startedAt, from);
+      const endedAt = Math.min(e.endedAt, to);
+      if (!(endedAt > startedAt)) continue;
+      if (!byAgent.has(e.agentId)) byAgent.set(e.agentId, { agentId: e.agentId, agentName: e.agentName, intervals: [] });
+      byAgent.get(e.agentId).intervals.push([startedAt, endedAt]);
+    }
+    const agents = [...byAgent.values()].map((a) => {
+      const current = AGENTS.find((x) => x.id === a.agentId);
+      a.intervals.sort((x, y) => x[0] - y[0]);
+      const merged = [];
+      for (const [s, e] of a.intervals) {
+        const last = merged[merged.length - 1];
+        if (last && s <= last.endedAt) last.endedAt = Math.max(last.endedAt, e);
+        else merged.push({ startedAt: s, endedAt: e });
+      }
+      return { agentId: a.agentId, agentName: current ? current.name : a.agentName, stretches: merged };
+    });
+    sendJson(res, 200, { agents });
+    return;
+  }
+
   // Dashboard: combined call stats filterable by date range, agent, and
   // kiosk. The client resolves whatever preset/custom range it's showing
   // into explicit from/to timestamps (ms since epoch) — this endpoint just
@@ -2729,6 +2836,11 @@ function handleGuestConnection(conn) {
   };
 }
 
+function avatarFor(agentId) {
+  const a = AGENTS.find((x) => x.id === agentId);
+  return (a && a.avatar) || null;
+}
+
 function handleAgentConnection(conn) {
   let agentName = null;
   let agentId = null;
@@ -2754,7 +2866,7 @@ function handleAgentConnection(conn) {
       conn.agentId = agentId; // readable from outside this closure — see agentLanguages()/broadcastQueue()
       conn.status = 'online'; // a fresh sign-in is always online; agent.js re-sends 'busy' if they'd chosen it before a refresh
       agentConns.add(conn);
-      conn.send({ type: 'agent-login-ok', name: agentName });
+      conn.send({ type: 'agent-login-ok', name: agentName, avatar: match.avatar || null });
       broadcastQueue();
       return;
     }
@@ -2763,11 +2875,41 @@ function handleAgentConnection(conn) {
 
     if (msg.type === 'set-status') {
       conn.status = msg.status === 'busy' ? 'busy' : 'online';
+      if (conn.status === 'busy') { if (!conn.busySince) conn.busySince = Date.now(); }
+      else closeBusyStretch(conn);
       conn.send({ type: 'status-updated', status: conn.status });
       // A waiting guest may now have (or lose) someone available — this
       // is also what makes a newly-online agent's ring start immediately,
       // since the queue itself was never hidden from them.
       syncBusyNotices();
+      return;
+    }
+
+    if (msg.type === 'set-avatar') {
+      const agent = AGENTS.find((a) => a.id === agentId);
+      const avatar = sanitizeAvatar(msg.avatar);
+      if (!agent || !avatar) {
+        conn.send({ type: 'avatar-save-failed' });
+        return;
+      }
+      agent.avatar = avatar;
+      const persisted = await saveAgents();
+      conn.send({ type: 'avatar-saved', avatar, persisted, persistenceConfigured: store.configured });
+      // Mid-call change: the guest's card updates straight away.
+      for (const c of calls.values()) {
+        if (c.agentConn === conn && c.guestConn && c.guestConn.alive) c.guestConn.send({ type: 'agent-avatar', avatar });
+      }
+      return;
+    }
+
+    // The agent's camera turned on/off (or they have none). The guest's kiosk
+    // swaps the video for the avatar card while it's off.
+    if (msg.type === 'camera-state' && msg.callId) {
+      const call = calls.get(msg.callId);
+      if (call && call.agentConn === conn) {
+        call.agentCameraOn = !!msg.on;
+        if (call.guestConn && call.guestConn.alive) call.guestConn.send({ type: 'agent-camera', on: call.agentCameraOn });
+      }
       return;
     }
 
@@ -2828,6 +2970,7 @@ function handleAgentConnection(conn) {
       call.agentId = agentId;
       call.agentName = agentName;
       call.answeredAt = Date.now();
+      call.agentCameraOn = true; // until the agent's browser says otherwise (camera-state)
       conn.send({
         type: 'call-assigned',
         callId,
@@ -2840,7 +2983,7 @@ function handleAgentConnection(conn) {
         transferNote: call.transferNote || null,
       });
       if (call.guestConn && call.guestConn.alive) {
-        call.guestConn.send({ type: 'call-accepted', agentName });
+        call.guestConn.send({ type: 'call-accepted', agentName, avatar: avatarFor(agentId), cameraOn: true });
       }
       broadcastQueue();
       return;
@@ -2940,6 +3083,7 @@ function handleAgentConnection(conn) {
     console.log('[agent] connection closed, was logged in as:', agentName || '(never logged in)');
     allConns.delete(conn);
     agentConns.delete(conn);
+    closeBusyStretch(conn);
     // Any call this agent was actively on gets ended so the guest isn't stuck.
     for (const [callId, call] of calls) {
       if (call.agentConn === conn) endCall(callId, 'agent-disconnected');
@@ -3170,6 +3314,7 @@ async function main() {
   CONFIG = await store.loadConfig(CONFIG);
   callLog.push(...await store.loadCallLog());
   missedCallLog.push(...await store.loadMissedCallLog());
+  busyLog.push(...await store.loadBusyLog());
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
   for (const r of await store.loadRatings()) ratings.set(r.callId, r);
 
