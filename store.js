@@ -45,6 +45,8 @@ const MISSED_CALL_LOG_SAFETY_CAP = 50000;
 // startedAt, endedAt) — feeds the admin dashboard's "Busy time per day".
 const BUSY_LOG_KEY = 'vfd:busylog';
 const BUSY_LOG_SAFETY_CAP = 100000;
+const STATUS_SNAPSHOT_KEY = 'vfd:statussnapshots';
+const STATUS_SNAPSHOT_SAFETY_CAP = 1500; // ~4 years of daily snapshots
 
 // Updated by every Redis call; lets the admin dashboard show whether
 // persistence is actually working right now, not just whether it's set up.
@@ -391,6 +393,37 @@ async function appendBusyEntry(entry) {
   }
 }
 
+// ---- Agent status snapshots (end-of-day Online/Busy/Offline per agent) ----
+
+/** Loads every persisted daily status snapshot ({day, takenAt, agents:[{id,name,status}]}). [] if not configured/unreachable. */
+async function loadStatusSnapshots() {
+  if (!configured) return [];
+  try {
+    const raw = await redisCommand(['LRANGE', STATUS_SNAPSHOT_KEY, '0', '-1']);
+    connected = true;
+    return (raw || []).map((s) => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load agent-status snapshots from Redis, starting empty:', err.message);
+    return [];
+  }
+}
+
+/** Appends one day's snapshot. Returns true if it was actually saved. */
+async function appendStatusSnapshot(entry) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['RPUSH', STATUS_SNAPSHOT_KEY, JSON.stringify(entry)]);
+    await redisCommand(['LTRIM', STATUS_SNAPSHOT_KEY, String(-STATUS_SNAPSHOT_SAFETY_CAP), '-1']);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save an agent-status snapshot to Redis — it will only exist in memory until the next restart:', err.message);
+    return false;
+  }
+}
+
 // ---- Chat conversations (WhatsApp / Messenger) ----------------------------
 // Each conversation is its own key, plus a set of conversation ids so we
 // can list them all — this avoids relying on Redis's HGETALL response
@@ -615,6 +648,8 @@ module.exports = {
   loadMissedCallLog,
   appendMissedCallEntry,
   loadBusyLog,
+  loadStatusSnapshots,
+  appendStatusSnapshot,
   appendBusyEntry,
   loadChats,
   persistChat,

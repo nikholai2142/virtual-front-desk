@@ -51,6 +51,16 @@
 
       <!-- DASHBOARD / OVERVIEW -->
       <div id="page-overview" class="admin-page active">
+        <section class="panel panel-full" aria-labelledby="live-title">
+          <div class="panel-head-row">
+            <h2 id="live-title">Agents right now</h2>
+            <span class="chart-note"><span class="live-dot"></span>Live</span>
+          </div>
+          <p class="stats-hint">Updates every few seconds. Online, Busy and Offline add up to the whole roster. <strong>On a call</strong> is a separate count: an agent on a call is still counted under the status they had (Online or Busy).</p>
+          <div id="live-counts" class="live-counts"></div>
+          <div id="live-agents" class="live-agents"></div>
+        </section>
+
         <div class="filters-bar">
           <div class="filter-field">
             <label for="filter-range">Date range</label>
@@ -140,6 +150,36 @@
           </div>
         </div>
         <p id="stats-note" class="stats-note"></p>
+
+        <div class="stat-tiles stat-tiles-3">
+          <div class="stat-tile"><span class="stat-value" id="busy-kpi-total">—</span><span class="stat-label">Busy time today · all agents</span></div>
+          <div class="stat-tile"><span class="stat-value" id="busy-kpi-avg">—</span><span class="stat-label">Average per agent today</span></div>
+          <div class="stat-tile"><span class="stat-value" id="busy-kpi-top">—</span><span class="stat-label" id="busy-kpi-top-label">Busiest today</span></div>
+        </div>
+
+        <section class="panel panel-full" aria-labelledby="agent-status-title">
+          <div class="panel-head-row">
+            <h2 id="agent-status-title">Agent Status</h2>
+            <div class="export-btn-group">
+              <button type="button" id="btn-export-status-csv" class="btn-small">Export CSV</button>
+              <button type="button" id="btn-export-status-pdf" class="btn-small">Export PDF</button>
+            </div>
+          </div>
+          <p class="stats-hint">Agents in each status per day, out of the whole roster. Past days show their <strong>end-of-day count</strong> (taken at <span id="status-snapshot-at">23:59</span>); today is live. History starts from the day this feature went live. Select a bar to see which agents.</p>
+          <ul class="status-legend" aria-label="Legend">
+            <li><span class="status-swatch" style="background:#22c55e"></span>Online</li>
+            <li><span class="status-swatch" style="background:#f6c76a"></span>Busy</li>
+            <li><span class="status-swatch" style="background:#8493b0"></span>Offline</li>
+          </ul>
+          <div id="agent-status-chart" class="agent-status-chart"></div>
+          <div class="status-pager">
+            <span id="status-range-label" class="chart-note"></span>
+            <div class="status-pager-btns">
+              <button type="button" id="btn-status-older" class="icon-btn status-arrow" aria-label="Show the previous 7 days">&#8592;</button>
+              <button type="button" id="btn-status-newer" class="icon-btn status-arrow" aria-label="Show the next 7 days">&#8594;</button>
+            </div>
+          </div>
+        </section>
 
         <section class="panel panel-full">
           <h2>Calls handled per agent</h2>
@@ -328,6 +368,24 @@
     </div>
   </div>
 
+  <!-- AGENT STATUS DETAIL — opens when a bar of the Agent Status chart is selected -->
+  <div id="agent-status-modal" class="modal-overlay hidden">
+    <div class="modal-card agent-detail-card" role="dialog" aria-modal="true" aria-labelledby="agent-status-detail-title">
+      <div class="agent-detail-header">
+        <div class="agent-detail-header-left">
+          <h2 id="agent-status-detail-title">—</h2>
+          <div class="export-btn-group">
+            <button type="button" id="btn-export-status-detail-csv" class="btn-small">Export CSV</button>
+            <button type="button" id="btn-export-status-detail-pdf" class="btn-small">Export PDF</button>
+          </div>
+        </div>
+        <button type="button" id="btn-close-agent-status" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+      <p id="agent-status-detail-sub" class="stats-hint"></p>
+      <div id="agent-status-detail-rows" class="agent-status-detail-rows"></div>
+    </div>
+  </div>
+
   <!-- CHANGE PASSWORD -->
   <div id="change-password-modal" class="modal-overlay hidden">
     <form id="change-password-form" class="modal-card">
@@ -419,6 +477,7 @@
     </div>
   </div>
 
+  <script src="avatar.js"></script>
   <script src="admin.js"></script>
 </body>
 </html>

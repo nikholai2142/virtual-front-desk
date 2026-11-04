@@ -225,6 +225,19 @@ let waitStartedAt = null;
 let waitTimerHandle = null;
 let callStartedAt = null;
 let callTimerHandle = null;
+// Mic settings for calls. Echo cancellation matters most on the kiosk: its
+// speaker plays the agent's voice and its mic would otherwise send it back,
+// so the agent hears themselves. Explicit (rather than the browser default)
+// so it can't silently be off; the goog* flags are Chrome's stricter
+// echo-cancellation / high-pass filter and are ignored elsewhere.
+const CALL_AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  googEchoCancellation: true,
+  googHighpassFilter: true,
+};
+
 let micOn = true;
 let camOn = true;
 let connectTimeoutHandle = null;
@@ -764,7 +777,7 @@ async function startLanguagePreview() {
   }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: CALL_AUDIO_CONSTRAINTS });
     localStream = stream;
     // The guest may have already cancelled (or this kiosk moved on some
     // other way) by the time permission resolves — still keep the stream
@@ -787,7 +800,7 @@ async function requestMediaAndJoin(topic, language) {
   showScreen('screen-connecting');
   if (!localStream || !localStream.active) {
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: CALL_AUDIO_CONSTRAINTS });
     } catch (err) {
       showError('Camera access needed', 'Please allow camera and microphone access, then try again.');
       return;

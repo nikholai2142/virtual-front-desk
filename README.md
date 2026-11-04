@@ -637,6 +637,13 @@ option in both places. If an agent's browser can't open a camera it falls back
 to audio-only and tells the server (`camera-state`), which relays it to the
 kiosk (`agent-camera`).
 
+## Agent status (Admin)
+
+- **Dashboard → "Agents right now"**: live Online / Busy / On a call / Offline counters and a per-agent table (status, time in status, busy time today). Online, Busy and Offline add up to the whole roster (signed-out agents count as Offline). **On a call** is a separate counter; an agent on a call is still counted under their Online/Busy status.
+- **Agent Performance → "Agent Status"**: 7-day grouped bar chart (Online / Busy / Offline). Today is live; past days show the **end-of-day count** from a snapshot the server takes once a day. Use the arrows (bottom right) to page back. Select a bar for a floating list of those agents. Export CSV / PDF on the chart and on the detail window.
+- Busy-time tiles (total, average per agent, busiest) use today's busy log.
+- Snapshot time defaults to 23:59 server local time; set `STATUS_SNAPSHOT_AT=HH:MM` and `TZ` to change. History starts the day this feature is deployed; without persistent storage it resets on restart.
+
 ## Call hold
 
 An agent can put an active call on hold from the **⏸ Hold** button next

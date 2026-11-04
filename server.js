@@ -839,6 +839,90 @@ function closeBusyStretch(conn) {
   store.appendBusyEntry(entry).catch(() => {});
 }
 
+// ---- Live agent status + end-of-day snapshots ---------------------------
+// Each agent on the roster is exactly one of: Online (signed in, set to
+// Online), Busy (signed in, set to Busy) or Offline (not signed in). "On a
+// call" is a SEPARATE count — an agent on a call is still counted under the
+// status they had (Online or Busy). With the same agent signed in on two
+// devices, they're Online if any device is Online.
+//
+// The admin's "Agent Status" chart shows one bar group per day. Past days
+// come from a snapshot of every agent's status taken once a day at
+// STATUS_SNAPSHOT_AT (default 23:59, server-local time — set TZ to the
+// hotel's timezone, same as the recording filenames); today is live. History
+// starts the day this was deployed.
+const statusSnapshots = [];
+const STATUS_SNAPSHOT_AT = /^\d{1,2}:\d{2}$/.test(process.env.STATUS_SNAPSHOT_AT || '') ? process.env.STATUS_SNAPSHOT_AT : '23:59';
+const STATUS_SNAPSHOT_LOCAL_ONLY_LIMIT = 800;
+const agentLastSignedOut = new Map(); // agentId -> ms of their last sign-out (this server run only)
+
+function localDayKey(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** {status:'online'|'busy'|'offline', since, onCall, callKioskId, callSince} for one roster agent right now. */
+function liveStatusFor(agent) {
+  const conns = [...agentConns].filter((c) => c.agentId === agent.id);
+  let status = 'offline';
+  let since = agentLastSignedOut.get(agent.id) || null;
+  if (conns.length) {
+    const online = conns.filter(isOnline);
+    const pool = online.length ? online : conns;
+    status = online.length ? 'online' : 'busy';
+    since = Math.min(...pool.map((c) => (status === 'busy' ? (c.busySince || c.statusSince) : c.statusSince) || Date.now()));
+  }
+  const call = [...calls.values()].find((c) => c.agentId === agent.id && c.answeredAt);
+  return { status, since, onCall: !!call, callKioskId: call ? call.kioskId : null, callSince: call ? call.answeredAt : null };
+}
+
+/** Seconds this agent spent set to Busy since `from` (merged across devices, including a stretch still open now). */
+function busySecondsSince(agentId, from) {
+  const now = Date.now();
+  const iv = [];
+  for (const e of busyLog) {
+    if (e.agentId !== agentId) continue;
+    const s = Math.max(e.startedAt, from);
+    if (e.endedAt > s) iv.push([s, e.endedAt]);
+  }
+  for (const c of agentConns) {
+    if (c.agentId === agentId && c.busySince) {
+      const s = Math.max(c.busySince, from);
+      if (now > s) iv.push([s, now]);
+    }
+  }
+  iv.sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let curEnd = -Infinity;
+  for (const [s, e] of iv) {
+    const start = Math.max(s, curEnd);
+    if (e > start) total += e - start;
+    curEnd = Math.max(curEnd, e);
+  }
+  return Math.round(total / 1000);
+}
+
+/** Records every roster agent's current status as `dayKey`'s snapshot (once per day). */
+function takeStatusSnapshot(dayKey) {
+  if (statusSnapshots.some((s) => s.day === dayKey)) return;
+  const entry = {
+    day: dayKey,
+    takenAt: Date.now(),
+    agents: AGENTS.map((a) => ({ id: a.id, name: a.name, status: liveStatusFor(a).status })),
+  };
+  statusSnapshots.push(entry);
+  if (!store.configured && statusSnapshots.length > STATUS_SNAPSHOT_LOCAL_ONLY_LIMIT) statusSnapshots.shift();
+  store.appendStatusSnapshot(entry).catch(() => {});
+  console.log(`[status] saved the ${dayKey} agent-status snapshot (${entry.agents.length} agents)`);
+}
+
+/** Takes today's snapshot once the clock reaches STATUS_SNAPSHOT_AT. Called every 30s, so a restart late in the day still catches it. */
+function maybeTakeStatusSnapshot() {
+  const now = new Date();
+  const [h, m] = STATUS_SNAPSHOT_AT.split(':').map(Number);
+  if (now.getHours() * 60 + now.getMinutes() >= h * 60 + m) takeStatusSnapshot(localDayKey(now.getTime()));
+}
+
 // ---- Agent password-reset requests ------------------------------------
 // An agent who forgot their password can request a reset from the login
 // screen (no auth needed, obviously — that's the whole point). This queues
@@ -2559,6 +2643,32 @@ async function handleAdminApi(req, res, urlObj) {
     return;
   }
 
+  // Live roster status for the Dashboard's "Agents right now" panel and
+  // today's bar in the Agent Status chart. `dayStart` = the start of the
+  // admin's own local day (ms) so "Busy today" follows their timezone.
+  if (urlObj.pathname === '/api/admin/agent-status/live' && req.method === 'GET') {
+    const dayStartParam = Number(urlObj.searchParams.get('dayStart'));
+    const dayStart = Number.isFinite(dayStartParam) && dayStartParam > 0 ? dayStartParam : new Date().setHours(0, 0, 0, 0);
+    const agents = AGENTS.map((a) => {
+      const live = liveStatusFor(a);
+      return { id: a.id, name: a.name, avatar: a.avatar || null, ...live, busyTodaySeconds: busySecondsSince(a.id, dayStart) };
+    });
+    const counts = {
+      online: agents.filter((a) => a.status === 'online').length,
+      busy: agents.filter((a) => a.status === 'busy').length,
+      onCall: agents.filter((a) => a.onCall).length,
+      offline: agents.filter((a) => a.status === 'offline').length,
+    };
+    sendJson(res, 200, { at: Date.now(), agents, counts });
+    return;
+  }
+
+  // End-of-day snapshots (oldest first) for the Agent Status chart's past days.
+  if (urlObj.pathname === '/api/admin/agent-status/history' && req.method === 'GET') {
+    sendJson(res, 200, { snapshotAt: STATUS_SNAPSHOT_AT, days: [...statusSnapshots].sort((a, b) => a.day.localeCompare(b.day)) });
+    return;
+  }
+
   // Busy time per agent. Returns each agent's busy stretches as plain
   // {startedAt, endedAt} intervals, clipped to from/to — overlapping stretches
   // for the same agent (signed in on two devices, both Busy) are merged so the
@@ -2865,6 +2975,7 @@ function handleAgentConnection(conn) {
       agentId = match.id;
       conn.agentId = agentId; // readable from outside this closure — see agentLanguages()/broadcastQueue()
       conn.status = 'online'; // a fresh sign-in is always online; agent.js re-sends 'busy' if they'd chosen it before a refresh
+      conn.statusSince = Date.now();
       agentConns.add(conn);
       conn.send({ type: 'agent-login-ok', name: agentName, avatar: match.avatar || null });
       broadcastQueue();
@@ -2874,7 +2985,9 @@ function handleAgentConnection(conn) {
     if (!agentName) return; // must log in first
 
     if (msg.type === 'set-status') {
-      conn.status = msg.status === 'busy' ? 'busy' : 'online';
+      const nextStatus = msg.status === 'busy' ? 'busy' : 'online';
+      if (nextStatus !== conn.status) conn.statusSince = Date.now();
+      conn.status = nextStatus;
       if (conn.status === 'busy') { if (!conn.busySince) conn.busySince = Date.now(); }
       else closeBusyStretch(conn);
       conn.send({ type: 'status-updated', status: conn.status });
@@ -3084,6 +3197,7 @@ function handleAgentConnection(conn) {
     allConns.delete(conn);
     agentConns.delete(conn);
     closeBusyStretch(conn);
+    if (conn.agentId && ![...agentConns].some((c) => c.agentId === conn.agentId)) agentLastSignedOut.set(conn.agentId, Date.now());
     // Any call this agent was actively on gets ended so the guest isn't stuck.
     for (const [callId, call] of calls) {
       if (call.agentConn === conn) endCall(callId, 'agent-disconnected');
@@ -3315,6 +3429,7 @@ async function main() {
   callLog.push(...await store.loadCallLog());
   missedCallLog.push(...await store.loadMissedCallLog());
   busyLog.push(...await store.loadBusyLog());
+  statusSnapshots.push(...await store.loadStatusSnapshots());
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
   for (const r of await store.loadRatings()) ratings.set(r.callId, r);
 
@@ -3345,6 +3460,8 @@ async function main() {
     console.log(`  Guest kiosk:    http://localhost:${PORT}/`);
     console.log(`  Agent dashboard: http://localhost:${PORT}/agent`);
     console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
+    maybeTakeStatusSnapshot();
+    setInterval(maybeTakeStatusSnapshot, 30 * 1000).unref();
     console.log(`  Loaded ${ADMINS.length} admin account(s), ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${KIOSK_GROUPS.length} kiosk group(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
   });
 }

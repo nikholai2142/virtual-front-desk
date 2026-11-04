@@ -70,6 +70,7 @@ function showAdminPage(pageId) {
   // shown — everything else is already kept fresh by refreshAll()'s poll.
   if (pageId === 'page-overview' && adminPassword) loadOverview();
   if (pageId === 'page-performance' && adminPassword) loadPerformanceStats();
+  if ((pageId === 'page-overview' || pageId === 'page-performance') && adminPassword) loadLiveStatus();
   if (pageId === 'page-config' && adminPassword) { loadStorage(); loadLanguageCatalog(); }
 }
 
@@ -201,6 +202,7 @@ async function refreshAll() {
     // loadPerformanceStats()).
     if (currentAdminPage === 'page-overview') loadOverview();
     if (currentAdminPage === 'page-performance') loadPerformanceStats();
+    loadLiveStatus();
   } catch (err) {
     if (err.status === 401) {
       clearInterval(refreshHandle);
@@ -2028,3 +2030,232 @@ if (storedAdminPassword) {
 } else {
   showScreen('screen-login');
 }
+
+
+// ---- Live agent status + Agent Status chart ----
+// Dashboard: "Agents right now" (live). Agent Performance: busy-time tiles and
+// the 7-day "Agent Status" chart — today is live, past days are the server's
+// end-of-day snapshots (see /api/admin/agent-status/history).
+
+const STATUS_COLORS = { online: '#22c55e', busy: '#f6c76a', offline: '#8493b0' };
+const STATUS_LABELS = { online: 'Online', busy: 'Busy', offline: 'Offline' };
+let liveStatus = null;          // last /agent-status/live response
+let statusHistory = { snapshotAt: '23:59', days: [] };
+let statusPage = 0;             // 0 = the 7 days ending today; 1 = the 7 before that, …
+let statusSelected = null;      // { day, status } of the bar whose detail window is open
+let lastStatusDays = [];        // the 7 days currently drawn (for export)
+
+function localMidnight(d = new Date()) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); }
+function dayKeyOf(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function fmtClock(ms) { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+function fmtCallTimer(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function sinceText(a) {
+  if (a.onCall) return `On a call${a.callKioskId ? ' · ' + a.callKioskId : ''} · ${fmtCallTimer(Date.now() - (a.callSince || Date.now()))}`;
+  if (!a.since) return a.status === 'offline' ? 'Not signed in this server run' : '—';
+  if (a.status === 'offline') return `Signed out ${new Date(a.since).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+  return `${STATUS_LABELS[a.status]} for ${fmtElapsed(Date.now() - a.since)} (since ${fmtClock(a.since)})`;
+}
+function avatarHtml(a, size) {
+  try { return window.VFDAvatar ? VFDAvatar.html(a.avatar, { size, name: a.name }) : ''; } catch { return ''; }
+}
+
+async function loadLiveStatus() {
+  try {
+    const [live, hist] = await Promise.all([
+      api(`/api/admin/agent-status/live?dayStart=${localMidnight()}`),
+      api('/api/admin/agent-status/history'),
+    ]);
+    liveStatus = live;
+    statusHistory = hist;
+    renderLiveStatus();
+    renderBusyKpis();
+    renderStatusChart();
+  } catch { /* the next poll retries */ }
+}
+
+function renderLiveStatus() {
+  const c = liveStatus && liveStatus.counts;
+  if (!c) return;
+  const tiles = [
+    ['online', 'Online', c.online, 'Signed in and set to Online'],
+    ['busy', 'Busy', c.busy, 'Signed in and set to Busy'],
+    ['call', 'On a call', c.onCall, 'Counted separately'],
+    ['offline', 'Offline', c.offline, 'Signed out'],
+  ];
+  document.getElementById('live-counts').innerHTML = tiles.map(([k, label, v, note]) =>
+    `<div class="live-count"><div class="live-count-label"><span class="live-count-dot" style="background:${k === 'call' ? '#7aa2ff' : STATUS_COLORS[k]}"></span>${label}</div><div class="live-count-value">${v}</div><div class="live-count-note">${note}</div></div>`).join('');
+  const rows = liveStatus.agents.map((a) => `<tr>
+    <td><div class="live-agent">${avatarHtml(a, 36)}<span>${escapeHtml(a.name)}</span></div></td>
+    <td><span class="status-pill ${a.status}">${STATUS_LABELS[a.status]}</span>${a.onCall ? '<span class="call-chip">On a call</span>' : ''}</td>
+    <td class="live-since">${escapeHtml(sinceText(a))}</td>
+    <td class="num"><strong>${escapeHtml(formatBusyDuration(a.busyTodaySeconds))}</strong></td></tr>`).join('');
+  document.getElementById('live-agents').innerHTML = `<table class="live-table"><thead><tr><th>Agent</th><th>Status</th><th>In this status</th><th class="num">Busy today</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No agents on the roster yet.</td></tr>'}</tbody></table>`;
+}
+
+function renderBusyKpis() {
+  if (!liveStatus) return;
+  const ag = liveStatus.agents;
+  const total = ag.reduce((n, a) => n + a.busyTodaySeconds, 0);
+  document.getElementById('busy-kpi-total').textContent = formatBusyDuration(total);
+  document.getElementById('busy-kpi-avg').textContent = ag.length ? formatBusyDuration(total / ag.length) : '—';
+  const top = ag.slice().sort((x, y) => y.busyTodaySeconds - x.busyTodaySeconds)[0];
+  document.getElementById('busy-kpi-top').textContent = top && top.busyTodaySeconds > 0 ? top.name : '—';
+  document.getElementById('busy-kpi-top-label').textContent = top && top.busyTodaySeconds > 0 ? `Busiest today · ${formatBusyDuration(top.busyTodaySeconds)}` : 'Busiest today';
+}
+
+/** One entry per calendar day for the visible page: {key, date, today, counts|null, agents:{online:[],busy:[],offline:[]}|null}. */
+function statusDaysForPage() {
+  const todayMid = localMidnight();
+  const out = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(todayMid);
+    d.setDate(d.getDate() - i - statusPage * 7);
+    const key = dayKeyOf(d.getTime());
+    const entry = { key, date: d, today: statusPage === 0 && i === 0, agents: null };
+    if (entry.today) {
+      if (liveStatus) {
+        entry.agents = { online: [], busy: [], offline: [] };
+        liveStatus.agents.forEach((a) => entry.agents[a.status].push({ name: a.name, status: a.status, since: a.since, onCall: a.onCall, id: a.id }));
+      }
+    } else {
+      const snap = statusHistory.days.find((s) => s.day === key);
+      if (snap) {
+        entry.agents = { online: [], busy: [], offline: [] };
+        snap.agents.forEach((a) => (entry.agents[a.status] || entry.agents.offline).push({ name: a.name, status: a.status, id: a.id }));
+      }
+    }
+    entry.counts = entry.agents ? { online: entry.agents.online.length, busy: entry.agents.busy.length, offline: entry.agents.offline.length } : null;
+    out.push(entry);
+  }
+  return out;
+}
+
+function dayLabel(e) {
+  return e.date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function renderStatusChart() {
+  const host = document.getElementById('agent-status-chart');
+  if (!host) return;
+  document.getElementById('status-snapshot-at').textContent = statusHistory.snapshotAt || '23:59';
+  const days = statusDaysForPage();
+  lastStatusDays = days;
+  let max = 4;
+  days.forEach((d) => { if (d.counts) max = Math.max(max, d.counts.online, d.counts.busy, d.counts.offline); });
+  if (max % 2) max += 1;
+  const ticks = [max, max / 2, 0];
+  const keys = ['online', 'busy', 'offline'];
+  const groups = days.map((d) => {
+    if (!d.counts) return `<div class="as-group"><span class="as-nodata">No data</span></div>`;
+    return `<div class="as-group">${keys.map((k) => {
+      const sel = statusSelected && statusSelected.day === d.key && statusSelected.status === k;
+      const h = (d.counts[k] / max) * 100;
+      return `<button type="button" class="as-bar-btn" data-day="${d.key}" data-status="${k}" aria-pressed="${sel}" aria-label="${dayLabel(d)}: ${d.counts[k]} ${STATUS_LABELS[k]}"><span class="as-bar" style="height:${h}%;background:${STATUS_COLORS[k]}"><span class="as-bar-val">${d.counts[k]}</span></span></button>`;
+    }).join('')}</div>`;
+  }).join('');
+  const labels = days.map((d) => `<div class="as-label"><strong>${d.date.toLocaleDateString([], { weekday: 'short' })}${d.today ? ' · Today' : ''}</strong>${d.date.toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>`).join('');
+  host.innerHTML = `<div class="as-yaxis">${ticks.map((t) => `<span>${t}</span>`).join('')}</div>
+    <div class="as-scroll"><div class="as-inner">
+      <div class="as-grid"><div></div><div></div><div></div></div>
+      <div class="as-groups${statusSelected ? ' has-selection' : ''}">${groups}</div>
+      <div class="as-labels">${labels}</div>
+    </div></div>`;
+  const first = days[0], last = days[days.length - 1];
+  document.getElementById('status-range-label').textContent = `${first.date.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${last.date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const oldestSnap = statusHistory.days.length ? statusHistory.days[0].day : null;
+  const olderStart = new Date(localMidnight());
+  olderStart.setDate(olderStart.getDate() - 6 - (statusPage + 1) * 7);
+  const olderEnd = new Date(localMidnight());
+  olderEnd.setDate(olderEnd.getDate() - (statusPage + 1) * 7);
+  // Older is possible while some snapshot exists on/before the end of the next-older week.
+  document.getElementById('btn-status-older').disabled = !(oldestSnap && oldestSnap <= dayKeyOf(olderEnd.getTime()));
+  document.getElementById('btn-status-newer').disabled = statusPage === 0;
+}
+
+document.getElementById('agent-status-chart').addEventListener('click', (e) => {
+  const btn = e.target.closest('.as-bar-btn');
+  if (btn) openStatusDetail(btn.dataset.day, btn.dataset.status);
+});
+document.getElementById('btn-status-older').addEventListener('click', () => { statusPage += 1; renderStatusChart(); });
+document.getElementById('btn-status-newer').addEventListener('click', () => { statusPage = Math.max(0, statusPage - 1); renderStatusChart(); });
+
+let statusDetailRows = []; // [[agent, status, detail, busy]]
+let statusDetailTitle = '';
+
+async function openStatusDetail(dayKey, status) {
+  const day = lastStatusDays.find((d) => d.key === dayKey);
+  if (!day || !day.agents) return;
+  statusSelected = { day: dayKey, status };
+  renderStatusChart();
+  const list = day.agents[status];
+  statusDetailTitle = `${STATUS_LABELS[status]} agents · ${dayLabel(day)}${day.today ? ' (live)' : ' (end of day)'}`;
+  document.getElementById('agent-status-detail-title').textContent = `${STATUS_LABELS[status]} · ${list.length} agent${list.length === 1 ? '' : 's'}`;
+  document.getElementById('agent-status-detail-sub').textContent = day.today
+    ? `${dayLabel(day)} · live right now`
+    : `${dayLabel(day)} · end-of-day count (${statusHistory.snapshotAt})`;
+  const box = document.getElementById('agent-status-detail-rows');
+  box.innerHTML = '<p class="stats-hint">Loading…</p>';
+  document.getElementById('agent-status-modal').classList.remove('hidden');
+  let busyBy = {};
+  try {
+    const from = day.date.getTime();
+    const to = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate() + 1).getTime();
+    const data = await api(`/api/admin/stats/busy?from=${from}&to=${to}`);
+    data.agents.forEach((a) => { busyBy[a.agentId] = a.stretches.reduce((n, s) => n + (s.endedAt - s.startedAt) / 1000, 0); });
+  } catch { /* busy column stays blank */ }
+  const live = day.today && liveStatus ? Object.fromEntries(liveStatus.agents.map((a) => [a.id, a])) : {};
+  statusDetailRows = list.map((a) => {
+    const l = live[a.id];
+    const detail = l ? sinceText(l) : 'End-of-day status';
+    return [a.name, STATUS_LABELS[status], detail, formatBusyDuration(busyBy[a.id] || 0)];
+  });
+  box.innerHTML = statusDetailRows.length
+    ? `<table class="live-table"><thead><tr><th>Agent</th><th>Status</th><th>${day.today ? 'In this status' : 'Note'}</th><th class="num">Busy that day</th></tr></thead><tbody>${statusDetailRows.map((r) => `<tr><td><strong>${escapeHtml(r[0])}</strong></td><td><span class="status-pill ${status}">${r[1]}</span></td><td class="live-since">${escapeHtml(r[2])}</td><td class="num">${escapeHtml(r[3])}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="stats-hint">No agents in this status.</p>';
+}
+
+function closeStatusDetail() {
+  document.getElementById('agent-status-modal').classList.add('hidden');
+  statusSelected = null;
+  renderStatusChart();
+}
+document.getElementById('btn-close-agent-status').addEventListener('click', closeStatusDetail);
+document.getElementById('agent-status-modal').addEventListener('click', (e) => { if (e.target.id === 'agent-status-modal') closeStatusDetail(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.getElementById('agent-status-modal').classList.contains('hidden')) closeStatusDetail();
+});
+
+const STATUS_DETAIL_HEADER = ['Agent', 'Status', 'Detail', 'Busy that day'];
+document.getElementById('btn-export-status-detail-csv').addEventListener('click', () => {
+  downloadCsv(`agent-status-${slugifyForFilename(statusDetailTitle)}-${exportDateStamp()}.csv`, STATUS_DETAIL_HEADER, statusDetailRows);
+});
+document.getElementById('btn-export-status-detail-pdf').addEventListener('click', () => {
+  exportPrintReport({ title: statusDetailTitle, subtitle: `Generated ${new Date().toLocaleString()}`, headerRow: STATUS_DETAIL_HEADER, dataRows: statusDetailRows });
+});
+
+function statusChartExportRows() {
+  return lastStatusDays.map((d) => d.counts
+    ? [dayKeyOf(d.date.getTime()), d.today ? 'Live' : 'End of day', d.counts.online, d.counts.busy, d.counts.offline,
+       d.agents.online.map((a) => a.name).join('; '), d.agents.busy.map((a) => a.name).join('; '), d.agents.offline.map((a) => a.name).join('; ')]
+    : [dayKeyOf(d.date.getTime()), 'No data', '', '', '', '', '', '']);
+}
+const STATUS_CHART_HEADER = ['Date', 'Basis', 'Online', 'Busy', 'Offline', 'Online agents', 'Busy agents', 'Offline agents'];
+document.getElementById('btn-export-status-csv').addEventListener('click', () => {
+  downloadCsv(`agent-status-${exportDateStamp()}.csv`, STATUS_CHART_HEADER, statusChartExportRows());
+});
+document.getElementById('btn-export-status-pdf').addEventListener('click', () => {
+  const l = document.getElementById('status-range-label').textContent;
+  exportPrintReport({ title: 'Agent Status', subtitle: `${l} · past days show end-of-day counts`, headerRow: STATUS_CHART_HEADER, dataRows: statusChartExportRows() });
+});

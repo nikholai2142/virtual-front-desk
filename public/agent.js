@@ -38,6 +38,19 @@ let availableLanguages = [{ code: 'en', label: 'English' }]; // refreshed from t
 let callStartedAt = null;
 let callTimerHandle = null;
 let noteDebounce = null;
+// Mic settings for calls. Echo cancellation matters most on the kiosk: its
+// speaker plays the agent's voice and its mic would otherwise send it back,
+// so the agent hears themselves. Explicit (rather than the browser default)
+// so it can't silently be off; the goog* flags are Chrome's stricter
+// echo-cancellation / high-pass filter and are ignored elsewhere.
+const CALL_AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  googEchoCancellation: true,
+  googHighpassFilter: true,
+};
+
 let micOn = true;
 let camOn = true;
 let agentHasCamera = true; // false when this device has no camera (or it was blocked) — the call runs audio-only and the guest sees the avatar card
@@ -967,12 +980,12 @@ async function startAsAnswerer() {
   try {
     agentHasCamera = true;
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: CALL_AUDIO_CONSTRAINTS });
     } catch (camErr) {
       // No camera (or it's blocked) — take the call audio-only; the guest's
       // kiosk shows this agent's avatar instead of video. A missing
       // microphone is still fatal, so the outer catch handles that.
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS });
       agentHasCamera = false;
       camOn = false;
     }
