@@ -161,6 +161,37 @@ document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
 function showScreen(id) {
   Object.values(screens).forEach((el) => el.classList.remove('active'));
   screens[id].classList.add('active');
+  updateChatWidget(id);
+}
+
+// ---- tawk.to chat widget -------------------------------------------------
+// Loaded only once this kiosk is signed in (never on the sign-in screen), and
+// hidden during a live video call so it doesn't cover the call controls.
+const TAWK_SRC = 'https://embed.tawk.to/6aec494004f6b63c31eb9f4b/1k6lfs9qa';
+let tawkRequested = false;
+let tawkWantVisible = false;
+window.Tawk_API = window.Tawk_API || {};
+window.Tawk_LoadStart = new Date();
+window.Tawk_API.onLoad = function () { applyTawkVisibility(); };
+
+function applyTawkVisibility() {
+  const api = window.Tawk_API;
+  if (!api) return;
+  try { if (tawkWantVisible) api.showWidget && api.showWidget(); else api.hideWidget && api.hideWidget(); } catch { /* widget not ready yet */ }
+}
+
+function updateChatWidget(screenId) {
+  tawkWantVisible = screenId !== 'screen-kiosk-setup' && screenId !== 'screen-call';
+  if (screenId !== 'screen-kiosk-setup' && !tawkRequested) {
+    tawkRequested = true;
+    const s1 = document.createElement('script');
+    s1.async = true;
+    s1.src = TAWK_SRC;
+    s1.charset = 'UTF-8';
+    s1.setAttribute('crossorigin', '*');
+    document.head.appendChild(s1);
+  }
+  applyTawkVisibility();
 }
 
 // ---- Per-kiosk branding --------------------------------------------------
