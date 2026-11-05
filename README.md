@@ -637,6 +637,10 @@ option in both places. If an agent's browser can't open a camera it falls back
 to audio-only and tells the server (`camera-state`), which relays it to the
 kiosk (`agent-camera`).
 
+## Unified sign-in (`/login`)
+
+One link for staff: `/login`. Enter your password; admins go to `/admin`, agents to `/agent`. If a password matches both an admin and an agent you pick which. `/admin` and `/agent` still work directly. Passwords are only checked, never stored by this page beyond the tab session.
+
 ## Agent status (Admin)
 
 - **Dashboard → "Agents right now"**: live Online / Busy / On a call / Offline counters and a per-agent table (status, time in status, busy time today). Online, Busy and Offline add up to the whole roster (signed-out agents count as Offline). **On a call** is a separate counter; an agent on a call is still counted under their Online/Busy status.

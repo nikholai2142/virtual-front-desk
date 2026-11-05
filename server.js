@@ -722,6 +722,7 @@ function serveStatic(req, res) {
   if (reqPath === '/') reqPath = '/kiosk.html';
   if (reqPath === '/agent') reqPath = '/agent.html';
   if (reqPath === '/admin') reqPath = '/admin.html';
+  if (reqPath === '/login') reqPath = '/login.html';
   const filePath = path.normalize(path.join(PUBLIC_DIR, reqPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403).end('Forbidden');
@@ -3233,6 +3234,20 @@ const server = http.createServer((req, res) => {
   }
   if (urlObj.pathname === '/api/call-config' && req.method === 'GET') {
     handleCallConfig(req, res);
+    return;
+  }
+  // Unified sign-in page (/login): says which role(s) a password belongs to,
+  // so one page can send admins to /admin and agents to /agent. Checks only —
+  // creates no session. Failed tries are slowed down a little.
+  if (urlObj.pathname === '/api/login-role' && req.method === 'POST') {
+    readJsonBody(req).then(async (body) => {
+      const pw = String(body.password || '');
+      const roles = [];
+      if (pw && ADMINS.some((a) => a.password === pw)) roles.push('admin');
+      if (pw && AGENTS.some((a) => a.password === pw)) roles.push('agent');
+      if (!roles.length) await new Promise((r) => setTimeout(r, 800));
+      sendJson(res, 200, { roles });
+    }).catch(() => sendJson(res, 400, { error: 'invalid JSON' }));
     return;
   }
   if (urlObj.pathname === '/api/agent/request-password-reset' && req.method === 'POST') {

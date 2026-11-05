@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sign in — Virtual Front Desk</title>
+<link rel="stylesheet" href="agent.css" />
+</head>
+<body>
+  <section class="screen active">
+    <form id="login-form" class="login-card">
+      <h1>Sign in</h1>
+      <p class="sub">Agents and admins sign in here. Enter your password and we'll take you to the right place.</p>
+      <input id="login-password" type="password" autocomplete="current-password" placeholder="Password" maxlength="60" autofocus />
+      <button id="login-submit" type="submit" class="btn btn-primary">Sign In</button>
+      <p id="login-error" class="error hidden"></p>
+      <div id="role-choice" class="hidden">
+        <p class="sub">This password works for both. Continue as:</p>
+        <button type="button" class="btn btn-primary" data-role="admin">Admin</button>
+        <button type="button" class="btn btn-ghost" data-role="agent">Agent</button>
+      </div>
+    </form>
+  </section>
+  <script>
+    const form = document.getElementById('login-form');
+    const err = document.getElementById('login-error');
+    const btn = document.getElementById('login-submit');
+    let pw = '';
+    function go(role) {
+      try { sessionStorage.setItem(role === 'admin' ? 'vfd_admin_password' : 'vfd_agent_password', pw); } catch {}
+      location.replace(role === 'admin' ? '/admin' : '/agent');
+    }
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.classList.add('hidden');
+      pw = document.getElementById('login-password').value.trim();
+      if (!pw) return;
+      btn.disabled = true; btn.textContent = 'Signing in…';
+      try {
+        const r = await fetch('/api/login-role', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) });
+        const { roles } = await r.json();
+        if (roles.length === 1) return go(roles[0]);
+        if (roles.length > 1) { document.getElementById('role-choice').classList.remove('hidden'); }
+        else { err.textContent = 'Incorrect password.'; err.classList.remove('hidden'); }
+      } catch { err.textContent = 'Could not reach the server. Please try again.'; err.classList.remove('hidden'); }
+      btn.disabled = false; btn.textContent = 'Sign In';
+    });
+    document.querySelectorAll('[data-role]').forEach((b) => b.addEventListener('click', () => go(b.dataset.role)));
+  </script>
+</body>
+</html>
