@@ -637,6 +637,15 @@ option in both places. If an agent's browser can't open a camera it falls back
 to audio-only and tells the server (`camera-state`), which relays it to the
 kiosk (`agent-camera`).
 
+## Kiosk chat
+
+A chat bubble on the kiosk's idle and thank-you screens (hidden during video calls). A guest sends a message and **every signed-in agent** gets a "New chat" alert (toast, one ring pulse, a badge on the Chats tab). The first agent to press **Take this chat** owns it; the alert and the list entry disappear for everyone else. The agent replies from the **Chats** tab (under "Kiosk chats") and presses **Close session** when done — the guest sees "This chat has ended" and the conversation is wiped, so the next guest starts blank.
+
+- Live only: chat text is kept in server memory and removed when the session closes, the kiosk is signed out, or a restart happens. Nothing is saved or shown in admin stats.
+- Unanswered chats expire after 30 minutes; idle chats after 1 hour.
+- If the agent's browser drops for more than 30 seconds, the chat goes back to the waiting pool for another agent.
+- Separate from the WhatsApp/Messenger inbox, which is unchanged. The tawk.to widget was removed from the kiosk.
+
 ## Unified sign-in (`/login`)
 
 One link for staff: `/login`. Enter your password; admins go to `/admin`, agents to `/agent`. If a password matches both an admin and an agent you pick which. `/admin` and `/agent` still work directly. Passwords are only checked, never stored by this page beyond the tab session.

@@ -2175,6 +2175,7 @@ async function handleAdminApi(req, res, urlObj) {
     if (activeConn) {
       activeConn.send({ type: 'kiosk-forced-logout', reason: 'account-removed' });
       activeConn.close();
+      clearKioskChat(id, 'kiosk session ended by admin');
       kioskSessions.delete(id);
     }
     const persisted = await saveKiosks();
@@ -2379,6 +2380,7 @@ async function handleAdminApi(req, res, urlObj) {
     if (activeConn) {
       activeConn.send({ type: 'kiosk-forced-logout', reason: 'admin' });
       activeConn.close();
+      clearKioskChat(id, 'kiosk session ended by admin');
       kioskSessions.delete(id);
     }
     sendJson(res, 200, {
@@ -2398,6 +2400,7 @@ async function handleAdminApi(req, res, urlObj) {
     if (!activeConn) { sendJson(res, 200, { ok: true, wasActive: false }); return; }
     activeConn.send({ type: 'kiosk-forced-logout', reason: 'admin' });
     activeConn.close();
+    clearKioskChat(id, 'kiosk session ended by admin');
     kioskSessions.delete(id);
     sendJson(res, 200, { ok: true, wasActive: true });
     return;
@@ -2885,11 +2888,39 @@ function handleGuestConnection(conn) {
         conn.send({ type: 'kiosk-logout-fail' });
         return;
       }
+      clearKioskChat(kioskAccountId, 'kiosk signed out');
       if (kioskSessions.get(kioskAccountId) === conn) kioskSessions.delete(kioskAccountId);
       if (myCallId) { endCall(myCallId, 'guest-disconnected'); myCallId = null; }
       conn.send({ type: 'kiosk-logout-ok' });
       kioskAccountId = null;
       kioskName = null;
+      return;
+    }
+
+    // ---- Kiosk chat (guest side) ----
+    if (msg.type === 'kchat-sync') {
+      const s = kioskChats.get(kioskAccountId);
+      if (s) sendKchatToKiosk(s); else conn.send({ type: 'kchat-ended' });
+      return;
+    }
+    if (msg.type === 'kchat-send') {
+      const text = String(msg.text || '').trim().slice(0, KCHAT_MAX_TEXT);
+      if (!text) return;
+      let s = kioskChats.get(kioskAccountId);
+      const isNew = !s;
+      if (isNew) {
+        s = { id: 'kc' + crypto.randomUUID().slice(0, 8), kioskId: kioskAccountId, kioskName: kioskName, agentId: null, agentName: null, createdAt: Date.now(), takenAt: null, messages: [], lastActivityAt: Date.now() };
+        kioskChats.set(kioskAccountId, s);
+      }
+      kchatAddMessage(s, 'guest', text);
+      sendKchatToKiosk(s);
+      if (isNew || !s.agentId) {
+        // Every signed-in agent gets the alert (or an updated preview) until someone takes it.
+        sendKchatToAgents(isNew ? 'kchat-new' : 'kchat-update', s);
+      } else {
+        const owner = [...agentConns].filter((c) => c.agentId === s.agentId);
+        owner.forEach((c) => c.send({ type: 'kchat-update', chat: kchatView(s) }));
+      }
       return;
     }
 
@@ -2947,6 +2978,76 @@ function handleGuestConnection(conn) {
   };
 }
 
+// ======================================================================
+// Kiosk chat — live text chat between a kiosk guest and ONE agent.
+// ======================================================================
+// A guest opens the chat on the kiosk; every signed-in agent gets a "new chat"
+// alert; the first agent to take it owns it, and it disappears for everyone
+// else. Closing the session wipes it. In memory only on purpose: no chat text
+// is stored once a session is closed (the next guest must never see it).
+
+const kioskChats = new Map(); // kioskAccountId -> session
+const KCHAT_MAX_TEXT = 1000;
+const KCHAT_MAX_MESSAGES = 200;
+const KCHAT_WAIT_EXPIRY_MS = 30 * 60 * 1000;   // nobody took it
+const KCHAT_IDLE_EXPIRY_MS = 60 * 60 * 1000;   // no messages for an hour
+const KCHAT_AGENT_GRACE_MS = 30 * 1000;        // agent's tab refreshing / reconnecting
+
+function kchatView(s) {
+  return {
+    id: s.id, kioskId: s.kioskId, kioskName: s.kioskName, status: s.agentId ? 'active' : 'waiting',
+    agentId: s.agentId, agentName: s.agentName, createdAt: s.createdAt, takenAt: s.takenAt,
+    messages: s.messages,
+  };
+}
+function sendKchatToKiosk(s) {
+  const c = kioskSessions.get(s.kioskId);
+  if (c) c.send({ type: 'kchat-state', chat: { status: s.agentId ? 'active' : 'waiting', agentName: s.agentName, avatar: s.agentId ? avatarFor(s.agentId) : null, messages: s.messages } });
+}
+function sendKchatToAgents(type, s, except) {
+  for (const a of agentConns) if (a !== except) a.send({ type, chat: kchatView(s) });
+}
+function kchatAddMessage(s, from, text, agentName) {
+  s.messages.push({ from, text, at: Date.now(), agentName: agentName || undefined });
+  if (s.messages.length > KCHAT_MAX_MESSAGES) s.messages.shift();
+  s.lastActivityAt = Date.now();
+}
+/** Ends and wipes a kiosk's chat; `reason` is shown to nobody but logs. */
+function clearKioskChat(kioskId, reason) {
+  const s = kioskChats.get(kioskId);
+  if (!s) return;
+  kioskChats.delete(kioskId);
+  clearTimeout(s.graceTimer);
+  const c = kioskSessions.get(kioskId);
+  if (c) c.send({ type: 'kchat-ended' });
+  for (const a of agentConns) a.send({ type: 'kchat-closed', chatId: s.id });
+  console.log(`[kchat] ${s.id} (${s.kioskName}) closed: ${reason}`);
+}
+function kchatListFor() { return [...kioskChats.values()].map(kchatView); }
+/** When an agent's last connection drops, give their chat back to the pool after a short grace. */
+function kchatAgentDropped(agentId) {
+  if ([...agentConns].some((c) => c.agentId === agentId)) return;
+  for (const s of kioskChats.values()) {
+    if (s.agentId !== agentId) continue;
+    clearTimeout(s.graceTimer);
+    s.graceTimer = setTimeout(() => {
+      if ([...agentConns].some((c) => c.agentId === agentId)) return;
+      s.agentId = null; s.agentName = null; s.takenAt = null;
+      kchatAddMessage(s, 'system', 'Your agent was disconnected. Connecting you with another team member.');
+      sendKchatToKiosk(s);
+      sendKchatToAgents('kchat-new', s);
+    }, KCHAT_AGENT_GRACE_MS);
+    s.graceTimer.unref && s.graceTimer.unref();
+  }
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [kioskId, s] of kioskChats) {
+    if (!s.agentId && now - s.createdAt > KCHAT_WAIT_EXPIRY_MS) clearKioskChat(kioskId, 'expired while waiting');
+    else if (now - (s.lastActivityAt || s.createdAt) > KCHAT_IDLE_EXPIRY_MS) clearKioskChat(kioskId, 'idle expiry');
+  }
+}, 60 * 1000).unref();
+
 function avatarFor(agentId) {
   const a = AGENTS.find((x) => x.id === agentId);
   return (a && a.avatar) || null;
@@ -2978,7 +3079,9 @@ function handleAgentConnection(conn) {
       conn.status = 'online'; // a fresh sign-in is always online; agent.js re-sends 'busy' if they'd chosen it before a refresh
       conn.statusSince = Date.now();
       agentConns.add(conn);
-      conn.send({ type: 'agent-login-ok', name: agentName, avatar: match.avatar || null });
+      conn.send({ type: 'agent-login-ok', id: match.id, name: agentName, avatar: match.avatar || null });
+      conn.send({ type: 'kchat-list', chats: kchatListFor() });
+      for (const s of kioskChats.values()) if (s.agentId === agentId) clearTimeout(s.graceTimer);
       broadcastQueue();
       return;
     }
@@ -3155,6 +3258,38 @@ function handleAgentConnection(conn) {
       return;
     }
 
+    // ---- Kiosk chat (agent side) ----
+    if (msg.type === 'kchat-take') {
+      const s = [...kioskChats.values()].find((x) => x.id === msg.chatId);
+      if (!s) { conn.send({ type: 'kchat-take-failed', chatId: msg.chatId, reason: 'gone' }); return; }
+      if (s.agentId && s.agentId !== agentId) { conn.send({ type: 'kchat-take-failed', chatId: s.id, reason: 'taken', by: s.agentName }); return; }
+      if (!s.agentId) {
+        s.agentId = agentId; s.agentName = agentName; s.takenAt = Date.now();
+        kchatAddMessage(s, 'system', `${agentName} joined the chat`);
+        // Everyone (including the taker's other tabs) learns who has it, so the alert disappears.
+        sendKchatToAgents('kchat-taken', s);
+        sendKchatToKiosk(s);
+      } else {
+        conn.send({ type: 'kchat-update', chat: kchatView(s) });
+      }
+      return;
+    }
+    if (msg.type === 'kchat-reply') {
+      const s = [...kioskChats.values()].find((x) => x.id === msg.chatId);
+      const text = String(msg.text || '').trim().slice(0, KCHAT_MAX_TEXT);
+      if (!s || s.agentId !== agentId || !text) return;
+      kchatAddMessage(s, 'agent', text, agentName);
+      sendKchatToKiosk(s);
+      sendKchatToAgents('kchat-update', s);
+      return;
+    }
+    if (msg.type === 'kchat-close') {
+      const s = [...kioskChats.values()].find((x) => x.id === msg.chatId);
+      if (!s || s.agentId !== agentId) return;
+      clearKioskChat(s.kioskId, `closed by ${agentName}`);
+      return;
+    }
+
     if (msg.type === 'get-chats') {
       const conversations = [...chatConversations.values()].sort((a, b) => b.lastMessageAt - a.lastMessageAt);
       conn.send({ type: 'chat-list', conversations });
@@ -3198,7 +3333,7 @@ function handleAgentConnection(conn) {
     allConns.delete(conn);
     agentConns.delete(conn);
     closeBusyStretch(conn);
-    if (conn.agentId && ![...agentConns].some((c) => c.agentId === conn.agentId)) agentLastSignedOut.set(conn.agentId, Date.now());
+    if (conn.agentId && ![...agentConns].some((c) => c.agentId === conn.agentId)) { agentLastSignedOut.set(conn.agentId, Date.now()); kchatAgentDropped(conn.agentId); }
     // Any call this agent was actively on gets ended so the guest isn't stuck.
     for (const [callId, call] of calls) {
       if (call.agentConn === conn) endCall(callId, 'agent-disconnected');

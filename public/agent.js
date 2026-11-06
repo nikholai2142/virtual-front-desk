@@ -58,6 +58,10 @@ let myAvatar = null; // this agent's saved avatar spec, see avatar.js
 let myName = '';
 let chatConversations = new Map(); // conversationId -> conversation
 let selectedChatId = null;
+let myAgentId = null;
+let kioskChats = new Map(); // id -> chat (waiting ones + the one I own)
+let selectedKioskChatId = null;
+let kchatToastDismissed = new Set();
 let connectTimeoutHandle = null;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
 let recording = null; // active call-recording session, see startRecording() below
@@ -520,6 +524,7 @@ function wsSend(obj) {
 function handleServerMessage(msg) {
   switch (msg.type) {
     case 'agent-login-ok':
+      myAgentId = msg.id || null;
       loginInProgress = false;
       clearTimeout(loginTimeoutHandle);
       setLoginBusy(false);
@@ -635,6 +640,53 @@ function handleServerMessage(msg) {
       wsSend({ type: 'get-log' });
       break;
 
+    case 'kchat-list':
+      kioskChats = new Map(msg.chats.map((c) => [c.id, c]));
+      kchatRefresh();
+      break;
+
+    case 'kchat-new':
+      kioskChats.set(msg.chat.id, msg.chat);
+      kchatRefresh();
+      if (!ringMuted) { try { playRingPulse(); } catch { /* audio not unlocked yet */ } }
+      break;
+
+    case 'kchat-update':
+      kioskChats.set(msg.chat.id, msg.chat);
+      kchatRefresh();
+      break;
+
+    case 'kchat-taken':
+      // Mine stays (and opens); somebody else's disappears for me, alert included.
+      if (msg.chat.agentId === myAgentId) {
+        kioskChats.set(msg.chat.id, msg.chat);
+        selectedKioskChatId = msg.chat.id;
+        selectedChatId = null;
+        switchView('chats');
+      } else {
+        kioskChats.delete(msg.chat.id);
+        if (selectedKioskChatId === msg.chat.id) selectedKioskChatId = null;
+      }
+      kchatRefresh();
+      break;
+
+    case 'kchat-closed':
+      kioskChats.delete(msg.chatId);
+      kchatToastDismissed.delete(msg.chatId);
+      if (selectedKioskChatId === msg.chatId) {
+        selectedKioskChatId = null;
+        document.getElementById('active-thread').classList.add('hidden');
+        document.getElementById('no-thread-placeholder').classList.remove('hidden');
+      }
+      kchatRefresh();
+      break;
+
+    case 'kchat-take-failed':
+      kioskChats.delete(msg.chatId);
+      kchatRefresh();
+      alert(msg.reason === 'taken' ? `${msg.by || 'Another agent'} already took this chat.` : 'This chat is no longer available.');
+      break;
+
     case 'chat-list':
       chatConversations = new Map(msg.conversations.map((c) => [c.id, c]));
       renderChatsList();
@@ -709,7 +761,8 @@ function renderChatsList() {
   const list = document.getElementById('chats-list');
   const conversations = [...chatConversations.values()].sort((a, b) => b.lastMessageAt - a.lastMessageAt);
 
-  const unreadCount = conversations.filter((c) => c.unread).length;
+  const waitingKiosk = [...kioskChats.values()].filter((c) => c.status === 'waiting').length;
+  const unreadCount = conversations.filter((c) => c.unread).length + waitingKiosk;
   const badge = document.getElementById('chat-unread-badge');
   if (unreadCount > 0) {
     badge.textContent = unreadCount;
@@ -718,12 +771,12 @@ function renderChatsList() {
     badge.classList.add('hidden');
   }
 
+  list.innerHTML = '';
+  renderKioskChatItems(list);
   if (!conversations.length) {
-    list.innerHTML = '<p class="empty-note">No conversations yet. Messages guests send to WhatsApp or Facebook will show up here.</p>';
+    if (!list.children.length) list.innerHTML = '<p class="empty-note">No conversations yet. Guest chats from the kiosk and messages to WhatsApp or Facebook will show up here.</p>';
     return;
   }
-
-  list.innerHTML = '';
   conversations.forEach((c) => {
     const last = c.messages[c.messages.length - 1];
     const div = document.createElement('div');
@@ -743,6 +796,8 @@ function renderChatsList() {
 
 function selectChat(id) {
   selectedChatId = id;
+  selectedKioskChatId = null;
+  document.getElementById('btn-kchat-close').classList.add('hidden');
   const convo = chatConversations.get(id);
   if (!convo) return;
   renderChatsList();
@@ -1446,9 +1501,11 @@ document.getElementById('thread-reply-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const textEl = document.getElementById('thread-reply-text');
   const text = textEl.value.trim();
-  if (!text || !selectedChatId) return;
+  if (!text) return;
   document.getElementById('thread-send-error').classList.add('hidden');
-  wsSend({ type: 'send-chat-reply', conversationId: selectedChatId, text });
+  if (selectedKioskChatId) wsSend({ type: 'kchat-reply', chatId: selectedKioskChatId, text });
+  else if (selectedChatId) wsSend({ type: 'send-chat-reply', conversationId: selectedChatId, text });
+  else return;
   textEl.value = '';
 });
 
@@ -1549,3 +1606,104 @@ const storedAgentPassword = sessionStorage.getItem(STORAGE_KEY);
 if (storedAgentPassword) {
   connectWS(storedAgentPassword);
 }
+
+
+// ---- Kiosk chats (live guest chat from a kiosk) ----
+
+function kchatMine() { return [...kioskChats.values()].find((c) => c.agentId === myAgentId && myAgentId); }
+
+function renderKioskChatItems(list) {
+  const waiting = [...kioskChats.values()].filter((c) => c.status === 'waiting').sort((a, b) => a.createdAt - b.createdAt);
+  const mine = kchatMine();
+  if (!waiting.length && !mine) return;
+  const title = document.createElement('div');
+  title.className = 'kchat-section-title';
+  title.textContent = 'Kiosk chats';
+  list.appendChild(title);
+  waiting.forEach((c) => {
+    const last = c.messages[c.messages.length - 1];
+    const div = document.createElement('div');
+    div.className = 'chat-item kchat-item waiting';
+    div.innerHTML = `
+      <div class="ci-top"><span class="ci-name"><span class="unread-dot"></span>${escapeHtml(c.kioskName)}</span><span class="ci-time">new</span></div>
+      <div class="ci-preview">${last ? escapeHtml(last.text) : ''}</div>
+      <button type="button" class="btn btn-primary kchat-take">Take this chat</button>`;
+    div.querySelector('.kchat-take').addEventListener('click', () => wsSend({ type: 'kchat-take', chatId: c.id }));
+    list.appendChild(div);
+  });
+  if (mine) {
+    const last = mine.messages[mine.messages.length - 1];
+    const div = document.createElement('div');
+    div.className = 'chat-item kchat-item' + (mine.id === selectedKioskChatId ? ' selected' : '');
+    div.innerHTML = `
+      <div class="ci-top"><span class="ci-name"><span class="ci-platform">🟢</span>${escapeHtml(mine.kioskName)} · your chat</span></div>
+      <div class="ci-preview">${last ? escapeHtml(last.text) : ''}</div>`;
+    div.addEventListener('click', () => { selectedKioskChatId = mine.id; selectedChatId = null; kchatRefresh(); });
+    list.appendChild(div);
+  }
+}
+
+function renderKioskThread(chat) {
+  document.getElementById('no-thread-placeholder').classList.add('hidden');
+  document.getElementById('active-thread').classList.remove('hidden');
+  document.getElementById('thread-send-error').classList.add('hidden');
+  document.getElementById('thread-platform-icon').textContent = '🟢';
+  document.getElementById('thread-contact-label').textContent = `${chat.kioskName} (kiosk guest chat)`;
+  document.getElementById('btn-kchat-close').classList.remove('hidden');
+  const box = document.getElementById('thread-messages');
+  box.innerHTML = '';
+  chat.messages.forEach((m) => {
+    const div = document.createElement('div');
+    const time = new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (m.from === 'system') {
+      div.className = 'msg-system';
+      div.textContent = m.text;
+    } else {
+      div.className = 'msg-bubble ' + (m.from === 'guest' ? 'in' : 'out');
+      const tag = m.from === 'agent' && m.agentName ? `<span class="msg-agent">${escapeHtml(m.agentName)}</span>` : '';
+      div.innerHTML = `${tag}${escapeHtml(m.text)}<span class="msg-time">${time}</span>`;
+    }
+    box.appendChild(div);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
+function kchatRefresh() {
+  renderChatsList();
+  if (selectedKioskChatId) {
+    const c = kioskChats.get(selectedKioskChatId);
+    if (c && c.agentId === myAgentId) renderKioskThread(c);
+  }
+  updateKchatToast();
+}
+
+function updateKchatToast() {
+  const toast = document.getElementById('kchat-toast');
+  const next = [...kioskChats.values()].filter((c) => c.status === 'waiting' && !kchatToastDismissed.has(c.id)).sort((a, b) => a.createdAt - b.createdAt)[0];
+  if (!next) { toast.classList.add('hidden'); toast.dataset.chatId = ''; return; }
+  toast.dataset.chatId = next.id;
+  const last = next.messages[next.messages.length - 1];
+  document.getElementById('kchat-toast-title').textContent = `New chat from ${next.kioskName}`;
+  document.getElementById('kchat-toast-preview').textContent = last ? `"${last.text}"` : '';
+  toast.classList.remove('hidden');
+}
+
+document.getElementById('kchat-toast-take').addEventListener('click', () => {
+  const id = document.getElementById('kchat-toast').dataset.chatId;
+  if (id) wsSend({ type: 'kchat-take', chatId: id });
+});
+document.getElementById('kchat-toast-later').addEventListener('click', () => {
+  const id = document.getElementById('kchat-toast').dataset.chatId;
+  if (id) kchatToastDismissed.add(id);
+  updateKchatToast();
+});
+document.getElementById('btn-kchat-close').addEventListener('click', () => {
+  document.getElementById('kchat-close-modal').classList.remove('hidden');
+});
+document.getElementById('kchat-close-cancel').addEventListener('click', () => {
+  document.getElementById('kchat-close-modal').classList.add('hidden');
+});
+document.getElementById('kchat-close-confirm').addEventListener('click', () => {
+  document.getElementById('kchat-close-modal').classList.add('hidden');
+  if (selectedKioskChatId) wsSend({ type: 'kchat-close', chatId: selectedKioskChatId });
+});

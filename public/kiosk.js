@@ -161,6 +161,7 @@ document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
 function showScreen(id) {
   Object.values(screens).forEach((el) => el.classList.remove('active'));
   screens[id].classList.add('active');
+  updateKchatVisibility();
 }
 
 // ---- Per-kiosk branding --------------------------------------------------
@@ -375,6 +376,7 @@ async function handleServerMessage(msg) {
       document.getElementById('kiosk-id-label').textContent = kioskName;
       applyKioskBranding(msg.branding);
       showScreen('screen-idle');
+      wsSend({ type: 'kchat-sync' }); // resume a chat that was in progress before a refresh / reconnect
       break;
 
     case 'kiosk-login-fail':
@@ -449,6 +451,14 @@ async function handleServerMessage(msg) {
 
     case 'agents-available':
       hideBusyPrompt();
+      break;
+
+    case 'kchat-state':
+      kchatOnState(msg.chat);
+      break;
+
+    case 'kchat-ended':
+      kchatOnEnded();
       break;
 
     case 'call-accepted':
@@ -1044,3 +1054,100 @@ if (storedKioskPassword) {
 } else {
   connectWS().catch(() => {}); // pre-connect so signing in is instant once a password is entered
 }
+
+
+// ---- Kiosk chat -----------------------------------------------------------
+// A live text chat with one agent (see server.js "Kiosk chat"). The launcher
+// and panel only show on the idle / thank-you screens, never over a video
+// call. When the agent closes the session the server tells us and we drop
+// every message — the next guest never sees the previous conversation.
+const kc = { open: false, status: null, agentName: null, messages: [], ended: false, unread: 0 };
+const kcEl = (id) => document.getElementById(id);
+
+function kchatPhase() {
+  if (kc.ended) return 'ended';
+  if (kc.status === 'active') return 'live';
+  if (kc.status === 'waiting') return 'waiting';
+  return 'greet';
+}
+
+function updateKchatVisibility() {
+  const root = document.getElementById('kchat');
+  if (!root) return;
+  const visible = kioskName && (screens['screen-idle'].classList.contains('active') || screens['screen-ended'].classList.contains('active'));
+  root.classList.toggle('hidden', !visible);
+}
+
+function kchatOnState(chat) {
+  const prevCount = kc.messages.length;
+  kc.status = chat.status;
+  kc.agentName = chat.agentName || null;
+  kc.messages = chat.messages || [];
+  kc.ended = false;
+  if (!kc.open && kc.messages.length > prevCount && kc.messages[kc.messages.length - 1].from !== 'guest') kc.unread += 1;
+  renderKchat();
+}
+
+function kchatOnEnded() {
+  const hadChat = kc.status !== null || kc.messages.length > 0;
+  kc.status = null; kc.agentName = null; kc.messages = []; kc.unread = 0;
+  kc.ended = hadChat && kc.open;
+  if (!kc.open) kc.ended = false;
+  renderKchat();
+}
+
+function renderKchat() {
+  const phase = kchatPhase();
+  kcEl('kchat-launcher').classList.toggle('hidden', kc.open);
+  kcEl('kchat-panel').classList.toggle('hidden', !kc.open);
+  const badge = kcEl('kchat-unread');
+  badge.classList.toggle('hidden', kc.unread === 0);
+  badge.textContent = String(kc.unread);
+  kcEl('kchat-title').textContent = phase === 'live' ? `Chat with ${kc.agentName || 'our team'}` : 'Chat with Customer Service';
+  kcEl('kchat-sub').textContent = phase === 'live' ? 'Customer Service · Online' : phase === 'waiting' ? 'Connecting…' : phase === 'ended' ? 'Chat ended' : 'We usually reply in a minute';
+
+  const box = kcEl('kchat-messages');
+  box.textContent = '';
+  const add = (cls, text, meta) => {
+    const row = document.createElement('div');
+    row.className = 'kchat-row ' + cls;
+    const b = document.createElement('div');
+    b.className = 'kchat-bubble';
+    b.textContent = text;
+    row.appendChild(b);
+    if (meta) { const m = document.createElement('div'); m.className = 'kchat-meta'; m.textContent = meta; row.appendChild(m); }
+    box.appendChild(row);
+  };
+  const time = (at) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (phase === 'greet') add('agent', 'Hi! How can we help?', 'Customer Service');
+  else if (phase !== 'ended') {
+    kc.messages.forEach((m) => {
+      if (m.from === 'guest') add('guest', m.text, `You · ${time(m.at)}`);
+      else if (m.from === 'agent') add('agent', m.text, `${m.agentName || 'Agent'} · ${time(m.at)}`);
+      else add('system', m.text, '');
+    });
+  }
+  kcEl('kchat-quick').classList.toggle('hidden', phase !== 'greet');
+  kcEl('kchat-waiting').classList.toggle('hidden', phase !== 'waiting');
+  kcEl('kchat-ended').classList.toggle('hidden', phase !== 'ended');
+  kcEl('kchat-form').classList.toggle('hidden', phase === 'ended');
+  box.scrollTop = box.scrollHeight;
+}
+
+function kchatSend(text) {
+  text = String(text || '').trim();
+  if (!text) return;
+  wsSend({ type: 'kchat-send', text });
+}
+
+kcEl('kchat-launcher-btn').addEventListener('click', () => { kc.open = true; kc.unread = 0; renderKchat(); });
+kcEl('kchat-min').addEventListener('click', () => { kc.open = false; if (kc.ended) kc.ended = false; renderKchat(); });
+kcEl('kchat-new').addEventListener('click', () => { kc.ended = false; renderKchat(); });
+document.querySelectorAll('#kchat-quick button').forEach((b) => b.addEventListener('click', () => kchatSend(b.textContent)));
+kcEl('kchat-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = kcEl('kchat-input');
+  kchatSend(input.value);
+  input.value = '';
+});
+renderKchat();

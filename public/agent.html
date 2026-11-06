@@ -136,6 +136,7 @@
           <div class="thread-header">
             <span id="thread-platform-icon">💬</span>
             <strong id="thread-contact-label">—</strong>
+            <button type="button" id="btn-kchat-close" class="btn-small kchat-close-btn hidden">Close session</button>
           </div>
           <div id="thread-messages" class="thread-messages"></div>
           <p id="thread-send-error" class="error hidden"></p>
@@ -240,6 +241,26 @@
     <div id="avatar-card" class="modal-card avatar-card" role="dialog" aria-modal="true" aria-labelledby="avatar-title"></div>
   </div>
 
+
+  <!-- Kiosk chat: alert for a new guest chat (every signed-in agent sees it until one takes it) -->
+  <div id="kchat-toast" class="kchat-toast hidden" role="alert">
+    <div class="kchat-toast-title"><span class="kchat-toast-dot"></span><span id="kchat-toast-title">New chat</span></div>
+    <div id="kchat-toast-preview" class="kchat-toast-preview"></div>
+    <div class="kchat-toast-actions">
+      <button type="button" id="kchat-toast-take" class="btn btn-primary">Take this chat</button>
+      <button type="button" id="kchat-toast-later" class="btn-small">Later</button>
+    </div>
+  </div>
+  <div id="kchat-close-modal" class="modal-overlay hidden">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="kchat-close-title">
+      <h2 id="kchat-close-title">Close this session?</h2>
+      <p class="sub">The guest sees "This chat has ended" and the conversation is cleared from the kiosk. The next guest starts with a blank chat.</p>
+      <div class="modal-actions">
+        <button type="button" id="kchat-close-cancel" class="btn btn-ghost">Keep chatting</button>
+        <button type="button" id="kchat-close-confirm" class="btn btn-danger">Close session</button>
+      </div>
+    </div>
+  </div>
   <script src="avatar.js"></script>
   <script src="avatar-editor.js"></script>
   <script src="agent.js"></script>
