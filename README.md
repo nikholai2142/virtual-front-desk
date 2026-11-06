@@ -641,7 +641,8 @@ kiosk (`agent-camera`).
 
 A chat bubble on the kiosk's idle and thank-you screens (hidden during video calls). A guest sends a message and **every signed-in agent** gets a "New chat" alert (toast, one ring pulse, a badge on the Chats tab). The first agent to press **Take this chat** owns it; the alert and the list entry disappear for everyone else. The agent replies from the **Chats** tab (under "Kiosk chats") and presses **Close session** when done — the guest sees "This chat has ended" and the conversation is wiped, so the next guest starts blank.
 
-- Live only: chat text is kept in server memory and removed when the session closes, the kiosk is signed out, or a restart happens. Nothing is saved or shown in admin stats.
+- Agents can attach a picture (📎 in the reply box). It is shrunk to a JPEG in the browser, max 12 per chat, and shown to the guest (tap to enlarge). Pictures are never written to disk and vanish with the session.
+- **History for agents:** when a session closes, the kiosk starts blank, but its text is saved so any agent can read it later under that kiosk in the Chats tab (older sessions dimmed, with "Previous session" / "Session closed" markers and a green "New session" divider). Kept 30 days, up to 1000 sessions, in the same storage as the call log (Redis if configured; otherwise in memory until restart). **Pictures are never saved**; the history shows "Picture removed when the session closed". Not shown in admin.
 - Unanswered chats expire after 30 minutes; idle chats after 1 hour.
 - If the agent's browser drops for more than 30 seconds, the chat goes back to the waiting pool for another agent.
 - Separate from the WhatsApp/Messenger inbox, which is unchanged. The tawk.to widget was removed from the kiosk.

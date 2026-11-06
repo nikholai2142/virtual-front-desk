@@ -140,7 +140,13 @@
           </div>
           <div id="thread-messages" class="thread-messages"></div>
           <p id="thread-send-error" class="error hidden"></p>
+          <div id="kchat-attach-preview" class="kchat-attach-preview hidden">
+            <img id="kchat-attach-img" alt="Picture to send" />
+            <button type="button" id="kchat-attach-remove" class="btn-small" aria-label="Remove picture">Remove</button>
+          </div>
           <form id="thread-reply-form" class="thread-reply-form">
+            <input id="kchat-attach-input" type="file" accept="image/*" class="hidden" />
+            <button type="button" id="btn-kchat-attach" class="btn-small kchat-attach-btn hidden" title="Attach a picture" aria-label="Attach a picture">📎</button>
             <textarea id="thread-reply-text" placeholder="Type a reply…" maxlength="2000"></textarea>
             <button type="submit" class="btn btn-primary">Send</button>
           </form>

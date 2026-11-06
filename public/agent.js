@@ -60,7 +60,9 @@ let chatConversations = new Map(); // conversationId -> conversation
 let selectedChatId = null;
 let myAgentId = null;
 let kioskChats = new Map(); // id -> chat (waiting ones + the one I own)
-let selectedKioskChatId = null;
+let selectedKioskChatId = null; // active session id, only when I own it
+let selectedKioskId = null;     // which kiosk's thread is open
+let kchatHistoryList = [];      // closed sessions (text only)
 let kchatToastDismissed = new Set();
 let connectTimeoutHandle = null;
 const CONNECT_TIMEOUT_MS = 15 * 1000; // see kiosk.js for why this exists
@@ -645,6 +647,16 @@ function handleServerMessage(msg) {
       kchatRefresh();
       break;
 
+    case 'kchat-history':
+      kchatHistoryList = msg.sessions || [];
+      kchatRefresh();
+      break;
+
+    case 'kchat-history-add':
+      kchatHistoryList.push(msg.session);
+      kchatRefresh();
+      break;
+
     case 'kchat-new':
       kioskChats.set(msg.chat.id, msg.chat);
       kchatRefresh();
@@ -661,11 +673,12 @@ function handleServerMessage(msg) {
       if (msg.chat.agentId === myAgentId) {
         kioskChats.set(msg.chat.id, msg.chat);
         selectedKioskChatId = msg.chat.id;
+        selectedKioskId = msg.chat.kioskId;
         selectedChatId = null;
         switchView('chats');
       } else {
-        kioskChats.delete(msg.chat.id);
-        if (selectedKioskChatId === msg.chat.id) selectedKioskChatId = null;
+        // Someone else has it: the alert goes away, and I never receive its content.
+        kioskChats.set(msg.chat.id, msg.chat);
       }
       kchatRefresh();
       break;
@@ -674,12 +687,18 @@ function handleServerMessage(msg) {
       kioskChats.delete(msg.chatId);
       kchatToastDismissed.delete(msg.chatId);
       if (selectedKioskChatId === msg.chatId) {
-        selectedKioskChatId = null;
-        document.getElementById('active-thread').classList.add('hidden');
-        document.getElementById('no-thread-placeholder').classList.remove('hidden');
+        selectedKioskChatId = null; // thread stays open, now showing history
+        kchatClearAttachment();
       }
       kchatRefresh();
       break;
+
+    case 'kchat-image-rejected': {
+      const errEl = document.getElementById('thread-send-error');
+      errEl.textContent = msg.reason;
+      errEl.classList.remove('hidden');
+      break;
+    }
 
     case 'kchat-take-failed':
       kioskChats.delete(msg.chatId);
@@ -797,7 +816,11 @@ function renderChatsList() {
 function selectChat(id) {
   selectedChatId = id;
   selectedKioskChatId = null;
+  selectedKioskId = null;
   document.getElementById('btn-kchat-close').classList.add('hidden');
+  document.getElementById('btn-kchat-attach').classList.add('hidden');
+  document.getElementById('thread-reply-form').classList.remove('hidden');
+  kchatClearAttachment();
   const convo = chatConversations.get(id);
   if (!convo) return;
   renderChatsList();
@@ -1501,9 +1524,13 @@ document.getElementById('thread-reply-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const textEl = document.getElementById('thread-reply-text');
   const text = textEl.value.trim();
-  if (!text) return;
+  if (!text && !(selectedKioskChatId && kchatPendingImage)) return;
   document.getElementById('thread-send-error').classList.add('hidden');
-  if (selectedKioskChatId) wsSend({ type: 'kchat-reply', chatId: selectedKioskChatId, text });
+  if (selectedKioskChatId) {
+    if (!text && !kchatPendingImage) return;
+    wsSend({ type: 'kchat-reply', chatId: selectedKioskChatId, text, image: kchatPendingImage || undefined });
+    kchatClearAttachment();
+  }
   else if (selectedChatId) wsSend({ type: 'send-chat-reply', conversationId: selectedChatId, text });
   else return;
   textEl.value = '';
@@ -1612,68 +1639,130 @@ if (storedAgentPassword) {
 
 function kchatMine() { return [...kioskChats.values()].find((c) => c.agentId === myAgentId && myAgentId); }
 
-function renderKioskChatItems(list) {
-  const waiting = [...kioskChats.values()].filter((c) => c.status === 'waiting').sort((a, b) => a.createdAt - b.createdAt);
-  const mine = kchatMine();
-  if (!waiting.length && !mine) return;
-  const title = document.createElement('div');
-  title.className = 'kchat-section-title';
-  title.textContent = 'Kiosk chats';
-  list.appendChild(title);
-  waiting.forEach((c) => {
-    const last = c.messages[c.messages.length - 1];
-    const div = document.createElement('div');
-    div.className = 'chat-item kchat-item waiting';
-    div.innerHTML = `
-      <div class="ci-top"><span class="ci-name"><span class="unread-dot"></span>${escapeHtml(c.kioskName)}</span><span class="ci-time">new</span></div>
-      <div class="ci-preview">${last ? escapeHtml(last.text) : ''}</div>
-      <button type="button" class="btn btn-primary kchat-take">Take this chat</button>`;
-    div.querySelector('.kchat-take').addEventListener('click', () => wsSend({ type: 'kchat-take', chatId: c.id }));
-    list.appendChild(div);
+function kchatKioskGroups() {
+  // One entry per kiosk that has a live chat or any saved history.
+  const groups = new Map();
+  const ensure = (id, name) => { if (!groups.has(id)) groups.set(id, { kioskId: id, kioskName: name, waiting: null, mine: null, foreign: null, last: null, lastAt: 0 }); return groups.get(id); };
+  kchatHistoryList.forEach((h) => { const g = ensure(h.kioskId, h.kioskName); if (h.closedAt >= g.lastAt) { g.lastAt = h.closedAt; g.last = h; } });
+  kioskChats.forEach((c) => {
+    const g = ensure(c.kioskId, c.kioskName);
+    if (c.status === 'waiting') g.waiting = c;
+    else if (c.agentId === myAgentId && myAgentId) g.mine = c;
+    else g.foreign = c;
   });
-  if (mine) {
-    const last = mine.messages[mine.messages.length - 1];
-    const div = document.createElement('div');
-    div.className = 'chat-item kchat-item' + (mine.id === selectedKioskChatId ? ' selected' : '');
-    div.innerHTML = `
-      <div class="ci-top"><span class="ci-name"><span class="ci-platform">🟢</span>${escapeHtml(mine.kioskName)} · your chat</span></div>
-      <div class="ci-preview">${last ? escapeHtml(last.text) : ''}</div>`;
-    div.addEventListener('click', () => { selectedKioskChatId = mine.id; selectedChatId = null; kchatRefresh(); });
-    list.appendChild(div);
-  }
+  return [...groups.values()].sort((a, b) => ((b.mine || b.waiting) ? 1 : 0) - ((a.mine || a.waiting) ? 1 : 0) || b.lastAt - a.lastAt);
 }
 
-function renderKioskThread(chat) {
+function renderKioskChatItems(list) {
+  const groups = kchatKioskGroups();
+  if (!groups.length) return;
+  const waiting = groups.filter((g) => g.waiting);
+  if (waiting.length) {
+    const t = document.createElement('div');
+    t.className = 'kchat-section-title';
+    t.textContent = 'New chats';
+    list.appendChild(t);
+    waiting.forEach((g) => {
+      const c = g.waiting;
+      const last = c.messages[c.messages.length - 1];
+      const div = document.createElement('div');
+      div.className = 'chat-item kchat-item waiting';
+      div.innerHTML = `
+        <div class="ci-top"><span class="ci-name"><span class="unread-dot"></span>${escapeHtml(c.kioskName)}</span><span class="ci-time">new</span></div>
+        <div class="ci-preview">${last ? escapeHtml(last.text) : ''}</div>
+        <button type="button" class="btn btn-primary kchat-take">Take this chat</button>`;
+      div.querySelector('.kchat-take').addEventListener('click', () => wsSend({ type: 'kchat-take', chatId: c.id }));
+      list.appendChild(div);
+    });
+  }
+  const t2 = document.createElement('div');
+  t2.className = 'kchat-section-title';
+  t2.textContent = 'Kiosk chats';
+  list.appendChild(t2);
+  groups.forEach((g) => {
+    let chip = 'Closed', cls = 'closed', preview = '', meta = '';
+    if (g.mine) { chip = 'Active'; cls = 'active'; const l = [...g.mine.messages].reverse().find((m) => m.from !== 'system'); preview = l ? l.text : ''; meta = 'you are in this chat'; }
+    else if (g.waiting) { chip = 'New chat waiting'; cls = 'waiting'; const l = g.waiting.messages[g.waiting.messages.length - 1]; preview = l ? l.text : ''; meta = 'waiting for an agent'; }
+    else if (g.foreign) { chip = `With ${g.foreign.agentName || 'another agent'}`; cls = 'foreign'; preview = 'Chat in progress'; meta = ''; }
+    if (g.last && !g.mine && !g.waiting && !g.foreign) {
+      const l = g.last.messages[g.last.messages.length - 1];
+      preview = l ? (l.text || 'Picture') : '';
+      meta = `${new Date(g.last.closedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · closed by ${g.last.closedBy || 'the system'}`;
+    } else if (g.last && meta) {
+      meta += ` · last session closed ${new Date(g.last.closedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
+    const div = document.createElement('div');
+    div.className = 'chat-item kchat-item' + (g.kioskId === selectedKioskId ? ' selected' : '');
+    div.innerHTML = `
+      <div class="ci-top"><span class="ci-name">${escapeHtml(g.kioskName)}</span><span class="kchat-chip ${cls}">${escapeHtml(chip)}</span></div>
+      <div class="ci-preview">${escapeHtml(preview)}</div>
+      <div class="ci-time">${escapeHtml(meta)}</div>`;
+    div.addEventListener('click', () => {
+      selectedKioskId = g.kioskId;
+      selectedChatId = null;
+      selectedKioskChatId = g.mine ? g.mine.id : null;
+      kchatClearAttachment();
+      kchatRefresh();
+    });
+    list.appendChild(div);
+  });
+}
+
+function kchatBubbleHtml(m, dim) {
+  const time = new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (m.from === 'system') return `<div class="msg-system${dim ? ' dim' : ''}">${escapeHtml(m.text)}</div>`;
+  const tag = m.from === 'agent' && m.agentName ? `<span class="msg-agent">${escapeHtml(m.agentName)}</span>` : '';
+  const img = m.image ? '<img class="msg-image" alt="Picture sent in chat" />' : '';
+  const gone = m.hadImage ? '<span class="msg-image-gone">Picture removed when the session closed</span>' : '';
+  return `<div class="msg-bubble ${m.from === 'guest' ? 'in' : 'out'}${dim ? ' dim' : ''}">${tag}${img}${gone}${m.text ? escapeHtml(m.text) : ''}<span class="msg-time">${time}</span></div>`;
+}
+
+function renderKioskThread(kioskId) {
+  const groups = kchatKioskGroups();
+  const g = groups.find((x) => x.kioskId === kioskId);
+  if (!g) return;
   document.getElementById('no-thread-placeholder').classList.add('hidden');
   document.getElementById('active-thread').classList.remove('hidden');
   document.getElementById('thread-send-error').classList.add('hidden');
   document.getElementById('thread-platform-icon').textContent = '🟢';
-  document.getElementById('thread-contact-label').textContent = `${chat.kioskName} (kiosk guest chat)`;
-  document.getElementById('btn-kchat-close').classList.remove('hidden');
+  const mine = g.mine;
+  document.getElementById('thread-contact-label').textContent = `${g.kioskName} (kiosk guest chat)`;
+  document.getElementById('btn-kchat-close').classList.toggle('hidden', !mine);
+  document.getElementById('btn-kchat-attach').classList.toggle('hidden', !mine);
+  document.getElementById('thread-reply-form').classList.toggle('hidden', !mine);
+
+  const fmt = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const box = document.getElementById('thread-messages');
-  box.innerHTML = '';
-  chat.messages.forEach((m) => {
-    const div = document.createElement('div');
-    const time = new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    if (m.from === 'system') {
-      div.className = 'msg-system';
-      div.textContent = m.text;
-    } else {
-      div.className = 'msg-bubble ' + (m.from === 'guest' ? 'in' : 'out');
-      const tag = m.from === 'agent' && m.agentName ? `<span class="msg-agent">${escapeHtml(m.agentName)}</span>` : '';
-      div.innerHTML = `${tag}${escapeHtml(m.text)}<span class="msg-time">${time}</span>`;
-    }
-    box.appendChild(div);
+  const sessions = kchatHistoryList.filter((h) => h.kioskId === kioskId).sort((a, b) => a.closedAt - b.closedAt);
+  let html = '';
+  sessions.forEach((h) => {
+    html += `<div class="kchat-divider old"><span>Previous session · ${escapeHtml(fmt(h.startedAt))} to ${escapeHtml(new Date(h.closedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}</span></div>`;
+    html += h.messages.map((m) => kchatBubbleHtml(m, true)).join('');
+    html += `<div class="kchat-closed-marker"><strong>Session closed</strong> ${h.closedBy ? 'by ' + escapeHtml(h.closedBy) : '(' + escapeHtml(h.reason || 'ended') + ')'} at ${escapeHtml(new Date(h.closedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}. The kiosk was cleared for the next guest.</div>`;
   });
+  if (mine) {
+    html += `<div class="kchat-divider new"><span>New session · ${escapeHtml(fmt(mine.createdAt))}</span></div>`;
+    html += mine.messages.map((m) => kchatBubbleHtml(m, false)).join('');
+  } else if (g.waiting) {
+    html += '<div class="kchat-notice">A guest has started a new chat. Take it from the list to reply. You can still read earlier sessions above.</div>';
+  } else if (g.foreign) {
+    html += `<div class="kchat-notice">${escapeHtml(g.foreign.agentName || 'Another agent')} is chatting with this kiosk right now.</div>`;
+  } else {
+    html += '<div class="kchat-notice">No active session. When a guest starts a new chat it appears here under a new divider.</div>';
+  }
+  box.innerHTML = html;
+  // pictures in the live session (kept in the DOM only while the session is open)
+  if (mine) {
+    const imgs = box.querySelectorAll('.kchat-divider.new ~ .msg-bubble .msg-image');
+    const withImg = mine.messages.filter((m) => m.image);
+    imgs.forEach((el, i) => { if (withImg[i]) el.src = withImg[i].image; });
+  }
   box.scrollTop = box.scrollHeight;
 }
 
 function kchatRefresh() {
   renderChatsList();
-  if (selectedKioskChatId) {
-    const c = kioskChats.get(selectedKioskChatId);
-    if (c && c.agentId === myAgentId) renderKioskThread(c);
-  }
+  if (selectedKioskId) renderKioskThread(selectedKioskId);
   updateKchatToast();
 }
 
@@ -1706,4 +1795,57 @@ document.getElementById('kchat-close-cancel').addEventListener('click', () => {
 document.getElementById('kchat-close-confirm').addEventListener('click', () => {
   document.getElementById('kchat-close-modal').classList.add('hidden');
   if (selectedKioskChatId) wsSend({ type: 'kchat-close', chatId: selectedKioskChatId });
+});
+
+
+// ---- Kiosk chat: picture attachments ----
+// The picture is shrunk to a JPEG here before sending, goes to the guest's kiosk
+// through the server's memory only, and is gone when the session is closed.
+let kchatPendingImage = null;
+
+function kchatClearAttachment() {
+  kchatPendingImage = null;
+  document.getElementById('kchat-attach-preview').classList.add('hidden');
+  document.getElementById('kchat-attach-input').value = '';
+}
+
+function kchatShrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1280;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      let q = 0.82, out = canvas.toDataURL('image/jpeg', q);
+      while (out.length > 600000 && q > 0.4) { q -= 0.12; out = canvas.toDataURL('image/jpeg', q); }
+      resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('not an image')); };
+    img.src = url;
+  });
+}
+
+document.getElementById('btn-kchat-attach').addEventListener('click', () => document.getElementById('kchat-attach-input').click());
+document.getElementById('kchat-attach-remove').addEventListener('click', kchatClearAttachment);
+document.getElementById('kchat-attach-input').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const errEl = document.getElementById('thread-send-error');
+  errEl.classList.add('hidden');
+  try {
+    kchatPendingImage = await kchatShrinkImage(file);
+    document.getElementById('kchat-attach-img').src = kchatPendingImage;
+    document.getElementById('kchat-attach-preview').classList.remove('hidden');
+  } catch {
+    errEl.textContent = 'That file could not be read as a picture.';
+    errEl.classList.remove('hidden');
+  }
 });

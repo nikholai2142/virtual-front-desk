@@ -2988,7 +2988,12 @@ function handleGuestConnection(conn) {
 
 const kioskChats = new Map(); // kioskAccountId -> session
 const KCHAT_MAX_TEXT = 1000;
+const KCHAT_HISTORY_DAYS = 30;                 // agents can read closed sessions this long
+const kchatHistory = [];                       // closed sessions, oldest first — TEXT ONLY (pictures are never kept)
 const KCHAT_MAX_MESSAGES = 200;
+const KCHAT_MAX_IMAGE_CHARS = 700000;  // base64 data URL of a JPEG the agent's browser already downsized
+const KCHAT_MAX_IMAGES = 12;           // per session — images live in memory until the session closes
+const KCHAT_IMAGE_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
 const KCHAT_WAIT_EXPIRY_MS = 30 * 60 * 1000;   // nobody took it
 const KCHAT_IDLE_EXPIRY_MS = 60 * 60 * 1000;   // no messages for an hour
 const KCHAT_AGENT_GRACE_MS = 30 * 1000;        // agent's tab refreshing / reconnecting
@@ -3007,13 +3012,13 @@ function sendKchatToKiosk(s) {
 function sendKchatToAgents(type, s, except) {
   for (const a of agentConns) if (a !== except) a.send({ type, chat: kchatView(s) });
 }
-function kchatAddMessage(s, from, text, agentName) {
-  s.messages.push({ from, text, at: Date.now(), agentName: agentName || undefined });
+function kchatAddMessage(s, from, text, agentName, image) {
+  s.messages.push({ from, text, at: Date.now(), agentName: agentName || undefined, image: image || undefined });
   if (s.messages.length > KCHAT_MAX_MESSAGES) s.messages.shift();
   s.lastActivityAt = Date.now();
 }
 /** Ends and wipes a kiosk's chat; `reason` is shown to nobody but logs. */
-function clearKioskChat(kioskId, reason) {
+function clearKioskChat(kioskId, reason, closer) {
   const s = kioskChats.get(kioskId);
   if (!s) return;
   kioskChats.delete(kioskId);
@@ -3021,7 +3026,24 @@ function clearKioskChat(kioskId, reason) {
   const c = kioskSessions.get(kioskId);
   if (c) c.send({ type: 'kchat-ended' });
   for (const a of agentConns) a.send({ type: 'kchat-closed', chatId: s.id });
+  // Keep a text-only record for agents. A picture becomes a placeholder flag.
+  if (s.messages.some((m) => m.from === 'guest')) {
+    const record = {
+      id: s.id, kioskId: s.kioskId, kioskName: s.kioskName, startedAt: s.createdAt, takenAt: s.takenAt,
+      closedAt: Date.now(), agentName: s.agentName || null, closedBy: closer || null, reason,
+      messages: s.messages.map((m) => ({ from: m.from, text: m.text, at: m.at, agentName: m.agentName, hadImage: m.image ? true : undefined })),
+    };
+    kchatHistory.push(record);
+    store.appendKioskChatHistory(record);
+    for (const a of agentConns) a.send({ type: 'kchat-history-add', session: record });
+  }
   console.log(`[kchat] ${s.id} (${s.kioskName}) closed: ${reason}`);
+}
+function kchatHistoryPrune() {
+  const cutoff = Date.now() - KCHAT_HISTORY_DAYS * 24 * 3600 * 1000;
+  const before = kchatHistory.length;
+  while (kchatHistory.length && kchatHistory[0].closedAt < cutoff) kchatHistory.shift();
+  if (kchatHistory.length !== before) store.replaceKioskChatHistory(kchatHistory);
 }
 function kchatListFor() { return [...kioskChats.values()].map(kchatView); }
 /** When an agent's last connection drops, give their chat back to the pool after a short grace. */
@@ -3047,6 +3069,7 @@ setInterval(() => {
     else if (now - (s.lastActivityAt || s.createdAt) > KCHAT_IDLE_EXPIRY_MS) clearKioskChat(kioskId, 'idle expiry');
   }
 }, 60 * 1000).unref();
+setInterval(() => kchatHistoryPrune(), 6 * 3600 * 1000).unref();
 
 function avatarFor(agentId) {
   const a = AGENTS.find((x) => x.id === agentId);
@@ -3081,6 +3104,7 @@ function handleAgentConnection(conn) {
       agentConns.add(conn);
       conn.send({ type: 'agent-login-ok', id: match.id, name: agentName, avatar: match.avatar || null });
       conn.send({ type: 'kchat-list', chats: kchatListFor() });
+      conn.send({ type: 'kchat-history', sessions: kchatHistory });
       for (const s of kioskChats.values()) if (s.agentId === agentId) clearTimeout(s.graceTimer);
       broadcastQueue();
       return;
@@ -3267,7 +3291,8 @@ function handleAgentConnection(conn) {
         s.agentId = agentId; s.agentName = agentName; s.takenAt = Date.now();
         kchatAddMessage(s, 'system', `${agentName} joined the chat`);
         // Everyone (including the taker's other tabs) learns who has it, so the alert disappears.
-        sendKchatToAgents('kchat-taken', s);
+        // Everyone learns who has it (so the alert disappears); only the taker gets the messages.
+        for (const a of agentConns) a.send({ type: 'kchat-taken', chat: a.agentId === agentId ? kchatView(s) : { id: s.id, kioskName: s.kioskName, agentId: s.agentId, agentName: s.agentName, status: 'active', messages: [] } });
         sendKchatToKiosk(s);
       } else {
         conn.send({ type: 'kchat-update', chat: kchatView(s) });
@@ -3277,16 +3302,26 @@ function handleAgentConnection(conn) {
     if (msg.type === 'kchat-reply') {
       const s = [...kioskChats.values()].find((x) => x.id === msg.chatId);
       const text = String(msg.text || '').trim().slice(0, KCHAT_MAX_TEXT);
-      if (!s || s.agentId !== agentId || !text) return;
-      kchatAddMessage(s, 'agent', text, agentName);
+      let image = null;
+      if (msg.image != null) {
+        image = String(msg.image);
+        const used = s ? s.messages.filter((m) => m.image).length : 0;
+        if (image.length > KCHAT_MAX_IMAGE_CHARS || !KCHAT_IMAGE_RE.test(image) || used >= KCHAT_MAX_IMAGES) {
+          conn.send({ type: 'kchat-image-rejected', reason: used >= KCHAT_MAX_IMAGES ? 'Too many images in this chat.' : 'That image could not be sent (too large or not a supported picture).' });
+          return;
+        }
+      }
+      if (!s || s.agentId !== agentId || (!text && !image)) return;
+      kchatAddMessage(s, 'agent', text, agentName, image);
       sendKchatToKiosk(s);
-      sendKchatToAgents('kchat-update', s);
+      // Only the owning agent's tabs get the thread — other agents never see a taken chat's content.
+      for (const c of agentConns) if (c.agentId === agentId) c.send({ type: 'kchat-update', chat: kchatView(s) });
       return;
     }
     if (msg.type === 'kchat-close') {
       const s = [...kioskChats.values()].find((x) => x.id === msg.chatId);
       if (!s || s.agentId !== agentId) return;
-      clearKioskChat(s.kioskId, `closed by ${agentName}`);
+      clearKioskChat(s.kioskId, 'closed by agent', agentName);
       return;
     }
 
@@ -3580,6 +3615,8 @@ async function main() {
   missedCallLog.push(...await store.loadMissedCallLog());
   busyLog.push(...await store.loadBusyLog());
   statusSnapshots.push(...await store.loadStatusSnapshots());
+  kchatHistory.push(...await store.loadKioskChatHistory());
+  kchatHistoryPrune();
   for (const c of await store.loadChats()) chatConversations.set(c.id, c);
   for (const r of await store.loadRatings()) ratings.set(r.callId, r);
 

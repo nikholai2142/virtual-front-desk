@@ -47,6 +47,8 @@ const BUSY_LOG_KEY = 'vfd:busylog';
 const BUSY_LOG_SAFETY_CAP = 100000;
 const STATUS_SNAPSHOT_KEY = 'vfd:statussnapshots';
 const STATUS_SNAPSHOT_SAFETY_CAP = 1500; // ~4 years of daily snapshots
+const KCHAT_HISTORY_KEY = 'vfd:kchathistory';
+const KCHAT_HISTORY_SAFETY_CAP = 1000; // closed kiosk-chat sessions kept (text only)
 
 // Updated by every Redis call; lets the admin dashboard show whether
 // persistence is actually working right now, not just whether it's set up.
@@ -424,6 +426,47 @@ async function appendStatusSnapshot(entry) {
   }
 }
 
+/** Closed kiosk-chat sessions (text only — pictures are never stored). */
+async function loadKioskChatHistory() {
+  if (!configured) return [];
+  try {
+    const raw = await redisCommand(['LRANGE', KCHAT_HISTORY_KEY, '0', '-1']);
+    connected = true;
+    return (raw || []).map((s) => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not load kiosk chat history from Redis, starting empty:', err.message);
+    return [];
+  }
+}
+
+async function appendKioskChatHistory(entry) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['RPUSH', KCHAT_HISTORY_KEY, JSON.stringify(entry)]);
+    await redisCommand(['LTRIM', KCHAT_HISTORY_KEY, String(-KCHAT_HISTORY_SAFETY_CAP), '-1']);
+    connected = true;
+    return true;
+  } catch (err) {
+    connected = false;
+    console.error('[store] could not save a kiosk chat session to Redis — it will only exist in memory until the next restart:', err.message);
+    return false;
+  }
+}
+
+/** Rewrites the whole list (used when old sessions expire). */
+async function replaceKioskChatHistory(entries) {
+  if (!configured) return false;
+  try {
+    await redisCommand(['DEL', KCHAT_HISTORY_KEY]);
+    for (const e of entries) await redisCommand(['RPUSH', KCHAT_HISTORY_KEY, JSON.stringify(e)]);
+    return true;
+  } catch (err) {
+    console.error('[store] could not prune kiosk chat history in Redis:', err.message);
+    return false;
+  }
+}
+
 // ---- Chat conversations (WhatsApp / Messenger) ----------------------------
 // Each conversation is its own key, plus a set of conversation ids so we
 // can list them all — this avoids relying on Redis's HGETALL response
@@ -613,6 +656,7 @@ async function clearTestData() {
     await redisCommand(['DEL', CALL_LOG_KEY]);
     await redisCommand(['DEL', MISSED_CALL_LOG_KEY]);
     await redisCommand(['DEL', BUSY_LOG_KEY]);
+    await redisCommand(['DEL', KCHAT_HISTORY_KEY]);
     for (const id of chatIds) await redisCommand(['DEL', chatKey(id)]);
     await redisCommand(['DEL', CHAT_IDS_KEY]);
     for (const id of ratingIds) await redisCommand(['DEL', ratingKey(id)]);
@@ -649,6 +693,9 @@ module.exports = {
   appendMissedCallEntry,
   loadBusyLog,
   loadStatusSnapshots,
+  loadKioskChatHistory,
+  appendKioskChatHistory,
+  replaceKioskChatHistory,
   appendStatusSnapshot,
   appendBusyEntry,
   loadChats,

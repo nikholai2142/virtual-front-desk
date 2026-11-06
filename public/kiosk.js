@@ -1091,6 +1091,7 @@ function kchatOnState(chat) {
 function kchatOnEnded() {
   const hadChat = kc.status !== null || kc.messages.length > 0;
   kc.status = null; kc.agentName = null; kc.messages = []; kc.unread = 0;
+  kcEl('kchat-lightbox').classList.add('hidden'); kcEl('kchat-lightbox-img').removeAttribute('src');
   kc.ended = hadChat && kc.open;
   if (!kc.open) kc.ended = false;
   renderKchat();
@@ -1108,12 +1109,20 @@ function renderKchat() {
 
   const box = kcEl('kchat-messages');
   box.textContent = '';
-  const add = (cls, text, meta) => {
+  const add = (cls, text, meta, image) => {
     const row = document.createElement('div');
     row.className = 'kchat-row ' + cls;
     const b = document.createElement('div');
     b.className = 'kchat-bubble';
-    b.textContent = text;
+    if (image) {
+      const im = document.createElement('img');
+      im.className = 'kchat-img';
+      im.alt = 'Picture from our team — tap to enlarge';
+      im.src = image;
+      im.addEventListener('click', () => { kcEl('kchat-lightbox-img').src = image; kcEl('kchat-lightbox').classList.remove('hidden'); });
+      b.appendChild(im);
+    }
+    if (text) b.appendChild(document.createTextNode(text));
     row.appendChild(b);
     if (meta) { const m = document.createElement('div'); m.className = 'kchat-meta'; m.textContent = meta; row.appendChild(m); }
     box.appendChild(row);
@@ -1123,7 +1132,7 @@ function renderKchat() {
   else if (phase !== 'ended') {
     kc.messages.forEach((m) => {
       if (m.from === 'guest') add('guest', m.text, `You · ${time(m.at)}`);
-      else if (m.from === 'agent') add('agent', m.text, `${m.agentName || 'Agent'} · ${time(m.at)}`);
+      else if (m.from === 'agent') add('agent', m.text, `${m.agentName || 'Agent'} · ${time(m.at)}`, m.image);
       else add('system', m.text, '');
     });
   }
@@ -1141,6 +1150,7 @@ function kchatSend(text) {
 }
 
 kcEl('kchat-launcher-btn').addEventListener('click', () => { kc.open = true; kc.unread = 0; renderKchat(); });
+kcEl('kchat-lightbox').addEventListener('click', () => { kcEl('kchat-lightbox').classList.add('hidden'); kcEl('kchat-lightbox-img').removeAttribute('src'); });
 kcEl('kchat-min').addEventListener('click', () => { kc.open = false; if (kc.ended) kc.ended = false; renderKchat(); });
 kcEl('kchat-new').addEventListener('click', () => { kc.ended = false; renderKchat(); });
 document.querySelectorAll('#kchat-quick button').forEach((b) => b.addEventListener('click', () => kchatSend(b.textContent)));
