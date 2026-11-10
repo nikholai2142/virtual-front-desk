@@ -938,6 +938,7 @@ async function refreshCallConfig() {
     const res = await fetch('/api/call-config');
     const data = await res.json();
     if (Number.isFinite(data.maxHoldSeconds)) configuredMaxHoldSeconds = data.maxHoldSeconds;
+    if (RECORDING_PRESETS[data.recordingQuality]) configuredRecordingQuality = data.recordingQuality;
     if (Array.isArray(data.languages) && data.languages.length) availableLanguages = data.languages;
   } catch { /* keep the previous values */ }
   const holdBtn = document.getElementById('btn-toggle-hold');
@@ -1144,11 +1145,16 @@ async function startAsAnswerer() {
 //   - RECORDING_VIDEO/AUDIO_BITRATE: hard caps passed to MediaRecorder. This
 //     is the single biggest lever — without it, the browser picks its own
 //     (often much higher) bitrate and file size is a lot less predictable.
-const RECORDING_WIDTH = 640;
-const RECORDING_HEIGHT = 360;
-const RECORDING_FPS = 15;
-const RECORDING_VIDEO_BITRATE = 350_000; // ~350 kbps
-const RECORDING_AUDIO_BITRATE = 32_000;  // ~32 kbps — plenty for speech
+// Quality presets, chosen by the admin (Configuration → Recordings) to control
+// file size: 'high' is the original setting; 'audio' skips the video entirely.
+// Approximate size per minute: high ~2.9 MB, standard ~1.8 MB, low ~1.2 MB, audio ~0.25 MB.
+const RECORDING_PRESETS = {
+  high:     { width: 640, height: 360, fps: 15, videoBps: 350_000, audioBps: 32_000, video: true },
+  standard: { width: 640, height: 360, fps: 15, videoBps: 220_000, audioBps: 24_000, video: true },
+  low:      { width: 480, height: 270, fps: 10, videoBps: 140_000, audioBps: 20_000, video: true },
+  audio:    { width: 0,   height: 0,   fps: 0,  videoBps: 0,       audioBps: 32_000, video: false },
+};
+let configuredRecordingQuality = 'standard'; // refreshed from the server, see refreshCallConfig()
 
 /** Draws `videoEl` into the (x, y, w, h) box, letterboxed to preserve its aspect ratio. */
 function drawContain(ctx, videoEl, x, y, w, h) {
@@ -1171,9 +1177,10 @@ function startRecording(callId) {
   try {
     const remoteVideoEl = document.getElementById('remote-video');
     const localVideoEl = document.getElementById('local-video');
+    const preset = RECORDING_PRESETS[configuredRecordingQuality] || RECORDING_PRESETS.standard;
     const canvas = document.createElement('canvas');
-    canvas.width = RECORDING_WIDTH;
-    canvas.height = RECORDING_HEIGHT;
+    canvas.width = preset.width || 2;
+    canvas.height = preset.height || 2;
     const ctx = canvas.getContext('2d');
 
     const rec = { callId, rafId: null, uploadChain: Promise.resolve(), seq: 0, mediaRecorder: null, audioCtx: null };
@@ -1188,9 +1195,9 @@ function startRecording(callId) {
       drawContain(ctx, localVideoEl, canvas.width - pipW - 16, canvas.height - pipH - 16, pipW, pipH);
       rec.rafId = requestAnimationFrame(draw);
     };
-    draw();
+    if (preset.video) draw();
 
-    const canvasStream = canvas.captureStream(RECORDING_FPS);
+    const canvasStream = preset.video ? canvas.captureStream(preset.fps) : null;
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     rec.audioCtx = audioCtx;
@@ -1202,20 +1209,22 @@ function startRecording(callId) {
       audioCtx.createMediaStreamSource(new MediaStream(remoteStream.getAudioTracks())).connect(dest);
     }
 
-    const mixedStream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+    const mixedStream = new MediaStream([...(canvasStream ? canvasStream.getVideoTracks() : []), ...dest.stream.getAudioTracks()]);
     // VP9 first: noticeably smaller than VP8 at the same visual quality, and
     // every browser that supports MediaRecorder well enough for this feature
     // (Chrome/Edge/Firefox) also decodes VP9 fine. VP8 stays as a fallback
     // for the rare browser that supports recording but not VP9.
-    const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+    const mimeType = (preset.video
+      ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      : ['audio/webm;codecs=opus', 'audio/webm'])
       .find((t) => MediaRecorder.isTypeSupported(t));
     const mediaRecorder = new MediaRecorder(mixedStream, {
       ...(mimeType ? { mimeType } : {}),
-      videoBitsPerSecond: RECORDING_VIDEO_BITRATE,
-      audioBitsPerSecond: RECORDING_AUDIO_BITRATE,
+      ...(preset.video ? { videoBitsPerSecond: preset.videoBps } : {}),
+      audioBitsPerSecond: preset.audioBps,
     });
     rec.mediaRecorder = mediaRecorder;
-    rec.mimeType = mediaRecorder.mimeType || mimeType || 'video/webm';
+    rec.mimeType = mediaRecorder.mimeType || mimeType || (preset.video ? 'video/webm' : 'audio/webm');
 
     mediaRecorder.ondataavailable = (evt) => {
       if (!evt.data || evt.data.size === 0) return;

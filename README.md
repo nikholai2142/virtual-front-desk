@@ -637,6 +637,18 @@ option in both places. If an agent's browser can't open a camera it falls back
 to audio-only and tells the server (`camera-state`), which relays it to the
 kiosk (`agent-camera`).
 
+## Recording size and automatic deletion
+
+Admin > Configuration > **Recordings**: pick the quality (High about 2.9 MB per minute, Standard 1.8, Low 1.2, Audio only 0.25) and how many days to keep recordings (default 30; 0 keeps them forever). Older recordings are deleted automatically (the file or R2 object and its entry), checked hourly and as soon as you save. Quality applies to calls that start afterwards.
+
+## Hosting on Oracle Cloud (free, always on)
+
+See `deploy/oracle/README.md` for the step-by-step guide and `deploy/oracle/setup.sh`, a one-command installer (Node, free HTTPS via Caddy, auto-restart service).
+
+## Bandwidth savers
+
+Hosts with a metered free tier (Render: 5 GB/month) count every byte sent. The server now: compresses text files and JSON (Brotli/gzip, e.g. `admin.js` 104 KB to about 25 KB); lets browsers re-check unchanged files with ETags (a reload of an unchanged page costs a few hundred bytes); caches `/branding/` images for a day (after replacing a default logo/background file, hard-refresh the kiosk once); and the admin dashboard polls every 60 s and pauses while its tab is hidden. For more headroom, put Cloudflare's free plan (your own domain) in front of the site.
+
 ## Kiosk chat
 
 A chat bubble on the kiosk's idle and thank-you screens (hidden during video calls). A guest sends a message and **every signed-in agent** gets a "New chat" alert (toast, one ring pulse, a badge on the Chats tab). The first agent to press **Take this chat** owns it; the alert and the list entry disappear for everyone else. The agent replies from the **Chats** tab (under "Kiosk chats") and presses **Close session** when done — the guest sees "This chat has ended" and the conversation is wiped, so the next guest starts blank.

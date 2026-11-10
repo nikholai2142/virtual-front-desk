@@ -309,6 +309,31 @@
         </section>
 
         <section class="panel panel-full">
+          <h2>Recordings</h2>
+          <form id="recording-config-form" class="hold-config-form">
+            <label for="recording-quality-select">Recording quality</label>
+            <p class="sub-tight">Smaller files use less storage and bandwidth. Applies to calls that start after you save. Approximate size per minute of call:</p>
+            <div class="hold-config-row">
+              <select id="recording-quality-select">
+                <option value="high">High: about 2.9 MB per minute</option>
+                <option value="standard">Standard: about 1.8 MB per minute</option>
+                <option value="low">Low: about 1.2 MB per minute</option>
+                <option value="audio">Audio only: about 0.25 MB per minute</option>
+              </select>
+            </div>
+            <label for="recording-retention-input" style="margin-top: 14px; display: block;">Delete recordings after</label>
+            <p class="sub-tight">Recordings older than this are removed automatically (file and entry). Enter 0 to keep them forever.</p>
+            <div class="hold-config-row">
+              <input id="recording-retention-input" type="number" min="0" max="3650" step="1" />
+              <span class="hold-config-unit">days</span>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+            <p id="recording-config-error" class="error hidden"></p>
+            <p id="recording-config-success" class="hint hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
           <h2>Kiosk appearance</h2>
           <form id="logo-size-form" class="hold-config-form">
             <label for="logo-size-input">Logo size</label>

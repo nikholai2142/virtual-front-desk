@@ -1,6 +1,6 @@
 'use strict';
 
-const REFRESH_INTERVAL_MS = 10000;
+const REFRESH_INTERVAL_MS = 60000;
 // sessionStorage (not localStorage): survives a page refresh, but clears
 // when the tab/window closes — matches "stay signed in for this session"
 // without leaving the password sitting around indefinitely on a shared
@@ -170,8 +170,11 @@ function startDashboard() {
   refreshAll();
   loadHoldConfig();
   loadLogoSizeConfig();
+  loadRecordingConfig();
   clearInterval(refreshHandle);
-  refreshHandle = setInterval(refreshAll, REFRESH_INTERVAL_MS);
+  // Skip polling while the tab is hidden (saves bandwidth); catch up as soon as it is shown again.
+  refreshHandle = setInterval(() => { if (!document.hidden) refreshAll(); }, REFRESH_INTERVAL_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && adminPassword) refreshAll(); });
 }
 
 document.getElementById('btn-refresh').addEventListener('click', refreshAll);
@@ -2258,4 +2261,36 @@ document.getElementById('btn-export-status-csv').addEventListener('click', () =>
 document.getElementById('btn-export-status-pdf').addEventListener('click', () => {
   const l = document.getElementById('status-range-label').textContent;
   exportPrintReport({ title: 'Agent Status', subtitle: `${l} · past days show end-of-day counts`, headerRow: STATUS_CHART_HEADER, dataRows: statusChartExportRows() });
+});
+
+
+// ---- Recordings: quality and automatic deletion ----
+async function loadRecordingConfig() {
+  try {
+    const data = await api('/api/admin/config');
+    document.getElementById('recording-quality-select').value = data.config.recordingQuality || 'standard';
+    document.getElementById('recording-retention-input').value = data.config.recordingRetentionDays ?? 30;
+  } catch { /* leave the fields as they are */ }
+}
+
+document.getElementById('recording-config-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('recording-config-error');
+  const okEl = document.getElementById('recording-config-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const recordingQuality = document.getElementById('recording-quality-select').value;
+  const recordingRetentionDays = Number(document.getElementById('recording-retention-input').value);
+  try {
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ recordingQuality, recordingRetentionDays }) });
+    warnIfNotPersisted(result);
+    okEl.textContent = recordingRetentionDays > 0
+      ? `Saved. Recordings older than ${recordingRetentionDays} day(s) are being removed.`
+      : 'Saved. Recordings are kept forever.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 3500);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
 });

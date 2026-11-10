@@ -12,6 +12,7 @@
 
 const http = require('http');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
@@ -466,11 +467,13 @@ function readLegacyAdminPassword() {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72 }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30 }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
 const MIN_LOGO_SIZE_PX = 24;
 const MAX_LOGO_SIZE_PX = 320;
+const RECORDING_QUALITIES = ['high', 'standard', 'low', 'audio'];
+const MAX_RECORDING_RETENTION_DAYS = 3650;
 function readLocalConfigFile() {
   try {
     return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
@@ -754,9 +757,48 @@ function serveStatic(req, res) {
       return;
     }
     const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(data);
+    // Bandwidth savers (the host's free tier is metered): conditional requests
+    // (a reload of an unchanged file costs ~200 bytes), compression for text,
+    // and a day of caching for images, which rarely change.
+    fs.stat(filePath, (statErr, st) => {
+      const etag = statErr ? null : `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+      const isImage = /^\.(png|jpg|jpeg|webp|ico|svg)$/.test(ext) && reqPath.startsWith('/branding/');
+      const headers = {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+        'Cache-Control': isImage ? 'public, max-age=86400' : 'no-cache',
+        Vary: 'Accept-Encoding',
+      };
+      if (etag) {
+        headers.ETag = etag;
+        if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); res.end(); return; }
+      }
+      sendMaybeCompressed(req, res, 200, headers, data, etag ? filePath + etag : null);
+    });
   });
+}
+
+const COMPRESSIBLE_RE = /^(text\/|application\/json|application\/javascript|image\/svg)/;
+const compressedCache = new Map(); // cache key (file + etag + encoding) -> Buffer
+/** Sends `data`, gzip/brotli-compressed when the client accepts it and it is worth it. */
+function sendMaybeCompressed(req, res, status, headers, data, cacheKey) {
+  const type = String(headers['Content-Type'] || '');
+  const accept = String((req && req.headers['accept-encoding']) || '');
+  const enc = /\bbr\b/.test(accept) ? 'br' : /\bgzip\b/.test(accept) ? 'gzip' : null;
+  if (!enc || data.length < 1024 || !COMPRESSIBLE_RE.test(type)) {
+    res.writeHead(status, { ...headers, 'Content-Length': data.length });
+    res.end(data);
+    return;
+  }
+  const key = cacheKey ? `${cacheKey}|${enc}` : null;
+  let out = key ? compressedCache.get(key) : null;
+  if (!out) {
+    out = enc === 'br'
+      ? zlib.brotliCompressSync(data, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: key ? 5 : 3 } })
+      : zlib.gzipSync(data, { level: key ? 6 : 4 });
+    if (key) { if (compressedCache.size > 200) compressedCache.clear(); compressedCache.set(key, out); }
+  }
+  res.writeHead(status, { ...headers, 'Content-Encoding': enc, 'Content-Length': out.length });
+  res.end(out);
 }
 
 // ======================================================================
@@ -1509,8 +1551,19 @@ async function computeAgentDetail(agent, from, to) {
 }
 
 function sendJson(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
+  const data = Buffer.from(JSON.stringify(body));
+  const headers = { 'Content-Type': 'application/json' };
+  const req = res.req;
+  // GET responses: compress, and answer 304 when nothing changed since the
+  // client's last poll (the admin dashboard polls every few seconds).
+  if (req && req.method === 'GET' && status === 200) {
+    const etag = `W/"${crypto.createHash('sha1').update(data).digest('base64').slice(0, 16)}"`;
+    headers.ETag = etag;
+    headers['Cache-Control'] = 'no-cache';
+    headers.Vary = 'Accept-Encoding';
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); res.end(); return; }
+  }
+  sendMaybeCompressed(req, res, status, headers, data, null);
 }
 
 function readJsonBody(req, maxBytes = 1e6) {
@@ -1597,6 +1650,7 @@ function handleCallConfig(req, res) {
   sendJson(res, 200, {
     maxHoldSeconds: CONFIG.maxHoldSeconds,
     logoSizePx: CONFIG.logoSizePx,
+    recordingQuality: RECORDING_QUALITIES.includes(CONFIG.recordingQuality) ? CONFIG.recordingQuality : 'standard',
     languages,
     activeLanguages,
     allLanguages: enabled,
@@ -1664,6 +1718,43 @@ function saveRecordingsIndex() {
     fs.writeFileSync(RECORDINGS_INDEX_FILE, JSON.stringify(recordingsIndex, null, 2));
   } catch (err) {
     console.error('[recordings] could not write recordings/index.json (non-fatal):', err.message);
+  }
+}
+
+/**
+ * Deletes recordings older than the admin-set retention (Configuration →
+ * Recordings; 0 = keep forever). Removes the file (local disk or R2) and its
+ * index entry. An R2 object that fails to delete stays in the index so the
+ * next sweep retries it.
+ */
+let pruningRecordings = false;
+async function pruneOldRecordings() {
+  const days = Number(CONFIG.recordingRetentionDays);
+  if (!days || days <= 0 || pruningRecordings) return;
+  pruningRecordings = true;
+  try {
+    const cutoff = Date.now() - days * 24 * 3600 * 1000;
+    const keep = [];
+    let removed = 0;
+    for (const entry of recordingsIndex) {
+      const when = entry.finishedAt || entry.startedAt || Date.now();
+      if (when >= cutoff) { keep.push(entry); continue; }
+      try {
+        if (entry.backend === 'r2') await r2.deleteObject(entry.key);
+        else await fs.promises.unlink(path.join(RECORDINGS_DIR, entry.filename)).catch(() => {});
+        removed += 1;
+      } catch (err) {
+        console.error('[recordings] could not delete an expired recording, will retry:', err.message);
+        keep.push(entry);
+      }
+    }
+    if (removed) {
+      recordingsIndex = keep;
+      saveRecordingsIndex();
+      console.log(`[recordings] deleted ${removed} recording(s) older than ${days} day(s)`);
+    }
+  } finally {
+    pruningRecordings = false;
   }
 }
 
@@ -2413,6 +2504,8 @@ async function handleAdminApi(req, res, urlObj) {
       max: MAX_HOLD_SECONDS,
       minLogoSizePx: MIN_LOGO_SIZE_PX,
       maxLogoSizePx: MAX_LOGO_SIZE_PX,
+      recordingQualities: RECORDING_QUALITIES,
+      maxRecordingRetentionDays: MAX_RECORDING_RETENTION_DAYS,
     });
     return;
   }
@@ -2443,8 +2536,26 @@ async function handleAdminApi(req, res, urlObj) {
       next.logoSizePx = logoSizePx;
     }
 
+    if (body.recordingQuality !== undefined) {
+      if (!RECORDING_QUALITIES.includes(body.recordingQuality)) {
+        sendJson(res, 400, { error: `recordingQuality must be one of: ${RECORDING_QUALITIES.join(', ')}` });
+        return;
+      }
+      next.recordingQuality = body.recordingQuality;
+    }
+
+    if (body.recordingRetentionDays !== undefined) {
+      const days = Math.round(Number(body.recordingRetentionDays));
+      if (!Number.isFinite(days) || days < 0 || days > MAX_RECORDING_RETENTION_DAYS) {
+        sendJson(res, 400, { error: `recordingRetentionDays must be a number between 0 (keep forever) and ${MAX_RECORDING_RETENTION_DAYS}` });
+        return;
+      }
+      next.recordingRetentionDays = days;
+    }
+
     CONFIG = next;
     const persisted = await saveConfig();
+    if (body.recordingRetentionDays !== undefined) pruneOldRecordings(); // apply a shorter limit straight away
     sendJson(res, 200, { config: CONFIG, persisted, persistenceConfigured: store.configured });
     return;
   }
@@ -3649,6 +3760,8 @@ async function main() {
     console.log(`  Admin dashboard: http://localhost:${PORT}/admin`);
     maybeTakeStatusSnapshot();
     setInterval(maybeTakeStatusSnapshot, 30 * 1000).unref();
+    setTimeout(pruneOldRecordings, 60 * 1000).unref();
+    setInterval(pruneOldRecordings, 6 * 3600 * 1000).unref();
     console.log(`  Loaded ${ADMINS.length} admin account(s), ${AGENTS.length} agent(s), ${KIOSKS.length} kiosk account(s), ${KIOSK_GROUPS.length} kiosk group(s), ${callLog.length} call history entr${callLog.length === 1 ? 'y' : 'ies'}, ${chatConversations.size} chat conversation(s).`);
   });
 }
