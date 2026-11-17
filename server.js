@@ -518,16 +518,24 @@ class WSConnection {
     this.heartbeatOk = true;
     this.onMessage = null;
     this.onClose = null;
+    this.connectedAt = Date.now();
+    // Why this connection ended — first reason recorded wins. Read by the
+    // kiosk onClose handler to log each drop.
+    this.closeReason = null;
 
     socket.on('data', (chunk) => this._onData(chunk));
-    socket.on('close', () => this._close());
-    socket.on('error', () => this._close());
+    socket.on('close', () => { this._noteClose('socket closed without a close frame (network dropped / tab killed / proxy cut it)'); this._close(); });
+    socket.on('error', (err) => { this._noteClose('socket error: ' + ((err && (err.code || err.message)) || 'unknown')); this._close(); });
     // The socket is upgraded from an http.Server connection, which leaves
     // it in half-open mode: when the remote side sends FIN we get 'end',
     // but the socket won't finish its own side (and so never emits
     // 'close') until we explicitly end it too. Without this, a guest
     // closing a tab or losing network never gets cleaned up server-side.
-    socket.on('end', () => { this._close(); this.socket.destroy(); });
+    socket.on('end', () => { this._noteClose('remote side ended the connection without a close frame (network dropped / tab killed / proxy cut it)'); this._close(); this.socket.destroy(); });
+  }
+
+  _noteClose(reason) {
+    if (!this.closeReason) this.closeReason = reason;
   }
 
   _onData(chunk) {
@@ -536,6 +544,7 @@ class WSConnection {
       this._parseFrames();
     } catch (err) {
       console.error('WS frame parse error, closing this connection:', err);
+      this._noteClose('frame parse error: ' + (err && err.message));
       this._close();
       try { this.socket.destroy(); } catch { /* already gone */ }
     }
@@ -588,6 +597,9 @@ class WSConnection {
 
   _handleFrame(opcode, fin, payload) {
     if (opcode === 0x8) { // close
+      const code = payload.length >= 2 ? payload.readUInt16BE(0) : null;
+      const text = payload.length > 2 ? payload.subarray(2).toString('utf8') : '';
+      this._noteClose('client sent a close frame (code ' + (code === null ? 'none' : code) + (text ? ', "' + text + '"' : '') + ') — page reload/navigation, tab closed, or the browser dropped the socket');
       this._sendRaw(0x8, Buffer.alloc(0));
       this.socket.end();
       return;
@@ -662,7 +674,8 @@ class WSConnection {
     this._sendRaw(0x9, Buffer.alloc(0));
   }
 
-  close() {
+  close(reason) {
+    this._noteClose(reason || 'server closed the connection');
     this._sendRaw(0x8, Buffer.alloc(0));
     this.socket.end();
   }
@@ -675,7 +688,8 @@ class WSConnection {
    * real socket 'close'/'error' would (via _close(), which fires onClose())
    * and drops the underlying TCP socket immediately.
    */
-  terminate() {
+  terminate(reason) {
+    this._noteClose(reason || 'terminated by server');
     this._close();
     try { this.socket.destroy(); } catch { /* already gone */ }
   }
@@ -2265,7 +2279,7 @@ async function handleAdminApi(req, res, urlObj) {
     const activeConn = kioskSessions.get(id);
     if (activeConn) {
       activeConn.send({ type: 'kiosk-forced-logout', reason: 'account-removed' });
-      activeConn.close();
+      activeConn.close('server closed: kiosk account removed by admin');
       clearKioskChat(id, 'kiosk session ended by admin');
       kioskSessions.delete(id);
     }
@@ -2470,7 +2484,7 @@ async function handleAdminApi(req, res, urlObj) {
     const activeConn = kioskSessions.get(id);
     if (activeConn) {
       activeConn.send({ type: 'kiosk-forced-logout', reason: 'admin' });
-      activeConn.close();
+      activeConn.close('server closed: kiosk password changed by admin');
       clearKioskChat(id, 'kiosk session ended by admin');
       kioskSessions.delete(id);
     }
@@ -2490,7 +2504,7 @@ async function handleAdminApi(req, res, urlObj) {
     const activeConn = kioskSessions.get(id);
     if (!activeConn) { sendJson(res, 200, { ok: true, wasActive: false }); return; }
     activeConn.send({ type: 'kiosk-forced-logout', reason: 'admin' });
-    activeConn.close();
+    activeConn.close('server closed: admin forced sign-out');
     clearKioskChat(id, 'kiosk session ended by admin');
     kioskSessions.delete(id);
     sendJson(res, 200, { ok: true, wasActive: true });
@@ -3079,6 +3093,10 @@ function handleGuestConnection(conn) {
   };
 
   conn.onClose = () => {
+    if (kioskAccountId) {
+      const secs = Math.round((Date.now() - conn.connectedAt) / 1000);
+      console.log(`[kiosk-drop] ${kioskName} (${kioskAccountId}) disconnected after ${secs}s, in call: ${myCallId ? 'yes' : 'no'}, reason: ${conn.closeReason || 'unknown'}`);
+    }
     allConns.delete(conn);
     // Only clear the session lock if THIS connection still holds it — a
     // stale close firing after a newer login already replaced it (shouldn't
@@ -3658,7 +3676,7 @@ setInterval(() => {
   for (const c of allConns) {
     if (!c.heartbeatOk) {
       console.log('[keepalive] connection missed a heartbeat — terminating as dead');
-      c.terminate();
+      c.terminate('heartbeat missed — no pong within ' + 20 + ' s (connection silently dead: sleep, wifi drop, proxy idle timeout)');
       continue;
     }
     c.heartbeatOk = false;
