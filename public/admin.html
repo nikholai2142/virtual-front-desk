@@ -311,6 +311,11 @@
         <section class="panel panel-full">
           <h2>Recordings</h2>
           <form id="recording-config-form" class="hold-config-form">
+            <label class="check-row" style="display: flex; align-items: center; gap: 10px; font-weight: 700;">
+              <input id="agents-can-play-input" type="checkbox" style="width: 20px; height: 20px;" />
+              Let agents play recordings
+            </label>
+            <p class="sub-tight">Off: agents do not see recording links in their call history. Calls are still recorded, and you can always play them here. Takes effect when you save.</p>
             <label for="recording-quality-select">Recording quality</label>
             <p class="sub-tight">Smaller files use less storage and bandwidth. Applies to calls that start after you save. Approximate size per minute of call:</p>
             <div class="hold-config-row">

@@ -1500,3 +1500,15 @@ Branding applies the moment a kiosk device signs in, and updates live
 (no sign-out needed) if you change the group's branding, or reassign the
 kiosk to a different group, from the admin dashboard while that kiosk is
 already signed in.
+
+## Why a kiosk dropped (server log)
+
+Every time a signed-in kiosk's connection ends, the server logs one line:
+
+    [kiosk-drop] Lobby (<id>) disconnected after 312s, in call: no, reason: <reason>
+
+Reasons you may see: the browser sent a close frame (code 1001 = page reload or tab closed, 1006/none = browser dropped it), the socket ended or errored without a close frame (network/proxy cut it), the heartbeat missed (no reply to a ping within 20 s: sleep, wifi drop, or a proxy idle timeout), or the server closed it (admin force sign-out, password change, kiosk removed). Check Render's Logs tab and search for `kiosk-drop`.
+
+## Agent access to recordings
+
+Configuration → Recordings has a switch, "Let agents play recordings". It is **off** by default. When off, agents do not see the "Play recording" link in their call history. Calls are still recorded, and admins can always play them from the admin dashboard. Turn it on and save to bring the links back; no redeploy is needed.

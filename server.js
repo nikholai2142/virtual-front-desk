@@ -467,7 +467,7 @@ function readLegacyAdminPassword() {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30 }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
 const MIN_LOGO_SIZE_PX = 24;
@@ -2567,6 +2567,14 @@ async function handleAdminApi(req, res, urlObj) {
       next.recordingRetentionDays = days;
     }
 
+    if (body.agentsCanPlayRecordings !== undefined) {
+      if (typeof body.agentsCanPlayRecordings !== 'boolean') {
+        sendJson(res, 400, { error: 'agentsCanPlayRecordings must be true or false' });
+        return;
+      }
+      next.agentsCanPlayRecordings = body.agentsCanPlayRecordings;
+    }
+
     CONFIG = next;
     const persisted = await saveConfig();
     if (body.recordingRetentionDays !== undefined) pruneOldRecordings(); // apply a shorter limit straight away
@@ -3404,8 +3412,11 @@ function handleAgentConnection(conn) {
     }
 
     if (msg.type === 'get-log') {
+      // Recording links are shown to agents only while the admin switch
+      // (Configuration > Recordings) is on. Calls are recorded either way.
+      const showRecordings = CONFIG.agentsCanPlayRecordings === true;
       const entries = await Promise.all(
-        callLog.slice(-50).reverse().map(async (e) => ({ ...e, recording: await recordingForCall(e.callId), rating: ratingForCall(e.callId) }))
+        callLog.slice(-50).reverse().map(async (e) => ({ ...e, recording: showRecordings ? await recordingForCall(e.callId) : null, rating: ratingForCall(e.callId) }))
       );
       conn.send({ type: 'call-log', entries });
       return;

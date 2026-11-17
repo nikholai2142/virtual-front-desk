@@ -2270,6 +2270,7 @@ async function loadRecordingConfig() {
     const data = await api('/api/admin/config');
     document.getElementById('recording-quality-select').value = data.config.recordingQuality || 'standard';
     document.getElementById('recording-retention-input').value = data.config.recordingRetentionDays ?? 30;
+    document.getElementById('agents-can-play-input').checked = data.config.agentsCanPlayRecordings === true;
   } catch { /* leave the fields as they are */ }
 }
 
@@ -2281,8 +2282,9 @@ document.getElementById('recording-config-form').addEventListener('submit', asyn
   okEl.classList.add('hidden');
   const recordingQuality = document.getElementById('recording-quality-select').value;
   const recordingRetentionDays = Number(document.getElementById('recording-retention-input').value);
+  const agentsCanPlayRecordings = document.getElementById('agents-can-play-input').checked;
   try {
-    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ recordingQuality, recordingRetentionDays }) });
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ recordingQuality, recordingRetentionDays, agentsCanPlayRecordings }) });
     warnIfNotPersisted(result);
     okEl.textContent = recordingRetentionDays > 0
       ? `Saved. Recordings older than ${recordingRetentionDays} day(s) are being removed.`
