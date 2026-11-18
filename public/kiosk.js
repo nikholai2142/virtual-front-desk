@@ -156,6 +156,13 @@ function loginKiosk(password, { isReconnect = false } = {}) {
     });
 }
 
+// Kiosk chat provider state (see applyKioskChatProvider below) — declared up here because showScreen() runs early.
+let kioskChatProvider = 'builtin';
+let externalChatLoaded = false;
+const externalChatEls = new Set(); // elements the external script added directly to <body>
+let externalChatObserver = null;
+let lastCallConfigAt = Date.now();
+
 const screens = {};
 document.querySelectorAll('.screen').forEach((el) => (screens[el.id] = el));
 function showScreen(id) {
@@ -274,6 +281,7 @@ async function loadCallConfig() {
     // CSS custom property so .brand-mark (kiosk.css) picks it up for both
     // the login and idle screens' logos in one place. Falls back to
     // kiosk.css's own 72px default if this is missing/invalid.
+    applyKioskChatProvider(data.kioskChatProvider, data.kioskChatScriptUrl);
     const logoSize = Number(data.logoSizePx);
     if (Number.isFinite(logoSize) && logoSize > 0) {
       document.documentElement.style.setProperty('--logo-size', `${logoSize}px`);
@@ -1071,11 +1079,42 @@ function kchatPhase() {
   return 'greet';
 }
 
+// ---- Kiosk chat provider (Admin > Configuration > Kiosk chat) ----------
+// 'builtin' = our own chat above. 'external' = a third-party widget loaded
+// from an admin-supplied https script address. Only one is ever shown. An
+// external script can't be unloaded, so switching back just hides whatever
+// it added to the page.
+
+function applyKioskChatProvider(provider, scriptUrl) {
+  kioskChatProvider = provider === 'external' && scriptUrl ? 'external' : 'builtin';
+  if (kioskChatProvider === 'external' && !externalChatLoaded) {
+    externalChatLoaded = true;
+    const baseline = new Set(Array.from(document.body.children));
+    externalChatObserver = new MutationObserver((muts) => {
+      for (const m of muts) m.addedNodes.forEach((n) => {
+        if (n.nodeType === 1 && !baseline.has(n) && n.tagName !== 'SCRIPT') externalChatEls.add(n);
+      });
+      updateKchatVisibility();
+    });
+    externalChatObserver.observe(document.body, { childList: true });
+    const s = document.createElement('script');
+    s.src = scriptUrl;
+    s.async = true;
+    s.onerror = () => console.warn('External chat script could not be loaded:', scriptUrl);
+    document.body.appendChild(s);
+  }
+  updateKchatVisibility();
+}
+
+
 function updateKchatVisibility() {
   const root = document.getElementById('kchat');
-  if (!root) return;
-  const visible = kioskName && (screens['screen-idle'].classList.contains('active') || screens['screen-ended'].classList.contains('active'));
-  root.classList.toggle('hidden', !visible);
+  const onChatScreen = !!kioskName && !!screens['screen-idle'] && (screens['screen-idle'].classList.contains('active') || screens['screen-ended'].classList.contains('active'));
+  if (root) root.classList.toggle('hidden', !(onChatScreen && kioskChatProvider === 'builtin'));
+  const showExternal = onChatScreen && kioskChatProvider === 'external';
+  externalChatEls.forEach((el) => { el.style.display = showExternal ? '' : 'none'; });
+  // Pick up an admin change without a page reload: re-read the setting when the idle screen comes back, at most once a minute.
+  if (onChatScreen && Date.now() - lastCallConfigAt > 60000) { lastCallConfigAt = Date.now(); loadCallConfig(); }
 }
 
 function kchatOnState(chat) {

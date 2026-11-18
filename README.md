@@ -1512,3 +1512,7 @@ Reasons you may see: the browser sent a close frame (code 1001 = page reload or 
 ## Agent access to recordings
 
 Configuration → Recordings has a switch, "Let agents play recordings". It is **off** by default. When off, agents do not see the "Play recording" link in their call history. Calls are still recorded, and admins can always play them from the admin dashboard. Turn it on and save to bring the links back; no redeploy is needed.
+
+## Kiosk chat provider
+
+Configuration → Kiosk chat lets you choose **Built-in chat** (default) or **External chat**. For External, paste the address from the provider's script line (must start with `https://`). The kiosk loads that script and shows its widget only on the idle and call-ended screens; the built-in chat button is hidden. Agents then answer in the provider's own inbox, so there are no chat alerts or history on the agent dashboard. Kiosks pick up a change within a minute while on the idle screen. The built-in chat is never removed; choose it again to switch back (the provider's widget is hidden at once).

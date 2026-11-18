@@ -339,6 +339,30 @@
         </section>
 
         <section class="panel panel-full">
+          <h2>Kiosk chat</h2>
+          <form id="kiosk-chat-form" class="hold-config-form">
+            <p class="sub-tight">Which chat the guest sees on the kiosk.</p>
+            <label style="display: flex; align-items: flex-start; gap: 10px; margin-top: 8px;">
+              <input type="radio" name="kiosk-chat-provider" id="kiosk-chat-builtin" value="builtin" style="margin-top: 3px;" />
+              <span><strong>Built-in chat</strong><br /><span class="sub-tight">Guests chat with your agents here: new chat alerts, one agent takes it, history, pictures.</span></span>
+            </label>
+            <label style="display: flex; align-items: flex-start; gap: 10px; margin-top: 10px;">
+              <input type="radio" name="kiosk-chat-provider" id="kiosk-chat-external" value="external" style="margin-top: 3px;" />
+              <span><strong>External chat (another provider)</strong><br /><span class="sub-tight">Guests chat through the provider's own widget. Your agents answer in the provider's inbox, not here, so there are no chat alerts or history on the agent dashboard.</span></span>
+            </label>
+            <div id="kiosk-chat-url-row" style="margin-top: 14px;">
+              <label for="kiosk-chat-url">Chat script address</label>
+              <p class="sub-tight">Only the address from the script line, starting with https://. The script runs on every kiosk, so only use a provider you trust.</p>
+              <div class="hold-config-row"><input id="kiosk-chat-url" type="text" maxlength="500" style="flex: 1; min-width: 280px;" /></div>
+            </div>
+            <div class="hold-config-row" style="margin-top: 14px;"><button type="submit" class="btn btn-primary">Save</button></div>
+            <p class="sub-tight">Kiosks pick up the change within a minute while on their idle screen. The built-in chat is never removed, so you can switch back at any time.</p>
+            <p id="kiosk-chat-error" class="error hidden"></p>
+            <p id="kiosk-chat-success" class="hint hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
           <h2>Kiosk appearance</h2>
           <form id="logo-size-form" class="hold-config-form">
             <label for="logo-size-input">Logo size</label>

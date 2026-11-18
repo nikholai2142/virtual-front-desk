@@ -467,7 +467,7 @@ function readLegacyAdminPassword() {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false, kioskChatProvider: 'builtin', kioskChatScriptUrl: 'https://tools.roomie.my/webchat/1575/webchat.js' }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
 const MIN_LOGO_SIZE_PX = 24;
@@ -1665,6 +1665,8 @@ function handleCallConfig(req, res) {
     maxHoldSeconds: CONFIG.maxHoldSeconds,
     logoSizePx: CONFIG.logoSizePx,
     recordingQuality: RECORDING_QUALITIES.includes(CONFIG.recordingQuality) ? CONFIG.recordingQuality : 'standard',
+    kioskChatProvider: CONFIG.kioskChatProvider === 'external' && CONFIG.kioskChatScriptUrl ? 'external' : 'builtin',
+    kioskChatScriptUrl: CONFIG.kioskChatProvider === 'external' ? CONFIG.kioskChatScriptUrl : '',
     languages,
     activeLanguages,
     allLanguages: enabled,
@@ -2573,6 +2575,29 @@ async function handleAdminApi(req, res, urlObj) {
         return;
       }
       next.agentsCanPlayRecordings = body.agentsCanPlayRecordings;
+    }
+
+    if (body.kioskChatProvider !== undefined || body.kioskChatScriptUrl !== undefined) {
+      const provider = body.kioskChatProvider !== undefined ? body.kioskChatProvider : next.kioskChatProvider;
+      if (provider !== 'builtin' && provider !== 'external') {
+        sendJson(res, 400, { error: 'kioskChatProvider must be builtin or external' });
+        return;
+      }
+      let scriptUrl = body.kioskChatScriptUrl !== undefined ? String(body.kioskChatScriptUrl || '').trim() : String(next.kioskChatScriptUrl || '');
+      if (scriptUrl) {
+        let parsed = null;
+        try { parsed = new URL(scriptUrl); } catch { /* handled below */ }
+        if (!parsed || parsed.protocol !== 'https:' || scriptUrl.length > 500 || /\s/.test(scriptUrl)) {
+          sendJson(res, 400, { error: 'The chat script address must be a valid https:// address' });
+          return;
+        }
+      }
+      if (provider === 'external' && !scriptUrl) {
+        sendJson(res, 400, { error: 'Enter the chat script address to use the external chat' });
+        return;
+      }
+      next.kioskChatProvider = provider;
+      next.kioskChatScriptUrl = scriptUrl;
     }
 
     CONFIG = next;

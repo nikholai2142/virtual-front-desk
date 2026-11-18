@@ -2264,6 +2264,31 @@ document.getElementById('btn-export-status-pdf').addEventListener('click', () =>
 });
 
 
+// ---- Kiosk chat provider ----
+function syncKioskChatUrlRow() {
+  document.getElementById('kiosk-chat-url-row').style.display = document.getElementById('kiosk-chat-external').checked ? '' : 'none';
+}
+document.querySelectorAll('input[name="kiosk-chat-provider"]').forEach((r) => r.addEventListener('change', syncKioskChatUrlRow));
+document.getElementById('kiosk-chat-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('kiosk-chat-error');
+  const okEl = document.getElementById('kiosk-chat-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const kioskChatProvider = document.getElementById('kiosk-chat-external').checked ? 'external' : 'builtin';
+  const kioskChatScriptUrl = document.getElementById('kiosk-chat-url').value.trim();
+  try {
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ kioskChatProvider, kioskChatScriptUrl }) });
+    warnIfNotPersisted(result);
+    okEl.textContent = 'Saved. Kiosks will switch within a minute.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 3500);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
 // ---- Recordings: quality and automatic deletion ----
 async function loadRecordingConfig() {
   try {
@@ -2271,6 +2296,11 @@ async function loadRecordingConfig() {
     document.getElementById('recording-quality-select').value = data.config.recordingQuality || 'standard';
     document.getElementById('recording-retention-input').value = data.config.recordingRetentionDays ?? 30;
     document.getElementById('agents-can-play-input').checked = data.config.agentsCanPlayRecordings === true;
+    const ext = data.config.kioskChatProvider === 'external';
+    document.getElementById('kiosk-chat-external').checked = ext;
+    document.getElementById('kiosk-chat-builtin').checked = !ext;
+    document.getElementById('kiosk-chat-url').value = data.config.kioskChatScriptUrl || '';
+    syncKioskChatUrlRow();
   } catch { /* leave the fields as they are */ }
 }
 
