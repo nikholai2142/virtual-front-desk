@@ -1,9 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Start a call">
-  <!-- Default placeholder icon for the "Start Video Call" button — a
-       simple suitcase. Replace this file with your own icon (see
-       README's "Customizing the kiosk's branding" section). -->
-  <rect x="30" y="20" width="40" height="16" rx="5" fill="none" stroke="#ffffff" stroke-width="6"/>
-  <rect x="12" y="34" width="76" height="54" rx="10" fill="#ffffff"/>
-  <rect x="12" y="34" width="76" height="16" rx="8" fill="#ffffff" opacity="0.001"/>
-  <line x1="12" y1="58" x2="88" y2="58" stroke="#2f6fed" stroke-width="6"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100" role="img" aria-label="Start a video call" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+  <!-- "Start Video Call" button icon: a customer-service agent on a screen,
+       drawn in white so it sits on the kiosk's accent colour. Replace this
+       file with your own icon (see README's "Customizing the kiosk's
+       branding" section). -->
+  <rect x="5" y="5" width="110" height="72" rx="9" stroke-width="6"/>
+  <rect x="14" y="14" width="92" height="54" rx="3" stroke-width="3.5"/>
+  <path d="M54 77v10M66 77v10" stroke-width="5"/>
+  <rect x="38" y="87" width="44" height="9" rx="4.5" stroke-width="5"/>
+  <ellipse cx="60" cy="38" rx="11" ry="13" stroke-width="3.5"/>
+  <path d="M46 38c0-11 6-19 14-19s14 8 14 19" stroke-width="3.5"/>
+  <rect x="41" y="33" width="6" height="12" rx="3" stroke-width="3.5"/>
+  <rect x="73" y="33" width="6" height="12" rx="3" stroke-width="3.5"/>
+  <path d="M30 68l3-12c1-4 5-6 11-8l8-3M90 68l-3-12c-1-4-5-6-11-8l-8-3" stroke-width="3.5"/>
+  <path d="M50 49l10 8 10-8" stroke-width="3.5"/>
 </svg>

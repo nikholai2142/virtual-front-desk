@@ -84,7 +84,7 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
   transition: transform .12s ease, background .12s ease;
 }
 .start-call-btn:active { transform: scale(0.96); background: var(--accent-2); }
-.dept-icon { width: 48px; height: 48px; object-fit: contain; }
+.dept-icon { width: 108px; height: 90px; object-fit: contain; }
 
 .link-btn-inline {
   background: none; border: none; color: var(--sub); font-size: 13px;
