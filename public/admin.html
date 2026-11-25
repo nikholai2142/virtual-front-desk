@@ -407,6 +407,12 @@
               <p class="sub-tight">Only the address from the script line, starting with https://. The script runs on every kiosk, so only use a provider you trust.</p>
               <div class="hold-config-row"><input id="kiosk-chat-url" type="text" maxlength="500" style="flex: 1; min-width: 280px;" /></div>
             </div>
+            <div id="kchat-presets-section" style="margin-top: 18px;">
+              <label style="display: block; font-weight: 700;">Preset messages (built-in chat)</label>
+              <p class="sub-tight">Buttons the guest can tap at the start of a chat. Tapping one sends that text to your agents. Up to 6, 80 characters each.</p>
+              <div id="kchat-presets-list"></div>
+              <button type="button" id="kchat-presets-add" class="btn" style="margin-top: 8px;">Add a preset</button>
+            </div>
             <div class="hold-config-row" style="margin-top: 14px;"><button type="submit" class="btn btn-primary">Save</button></div>
             <p class="sub-tight">Kiosks pick up the change within a minute while on their idle screen. The built-in chat is never removed, so you can switch back at any time.</p>
             <p id="kiosk-chat-error" class="error hidden"></p>

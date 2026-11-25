@@ -370,6 +370,7 @@ async function loadCallConfig() {
     // kiosk.css's own 72px default if this is missing/invalid.
     applyKioskChatProvider(data.kioskChatProvider, data.kioskChatScriptUrl);
     if (data.consent) consentConfig = data.consent;
+    if (Array.isArray(data.kioskChatPresets)) renderKchatPresets(data.kioskChatPresets);
     if (data.footer) { footerConfig = data.footer; renderKioskFooter(); }
     const logoSize = Number(data.logoSizePx);
     if (Number.isFinite(logoSize) && logoSize > 0) {
@@ -1179,6 +1180,7 @@ if (storedKioskPassword) {
 // and panel only show on the idle / thank-you screens, never over a video
 // call. When the agent closes the session the server tells us and we drop
 // every message — the next guest never sees the previous conversation.
+let kchatPresets = ['I have a question', 'I need something for my room']; // replaced by the admin's list (see renderKchatPresets)
 const kc = { open: false, status: null, agentName: null, messages: [], ended: false, unread: 0 };
 const kcEl = (id) => document.getElementById(id);
 
@@ -1285,7 +1287,7 @@ function renderKchat() {
       else add('system', m.text, '');
     });
   }
-  kcEl('kchat-quick').classList.toggle('hidden', phase !== 'greet');
+  kcEl('kchat-quick').classList.toggle('hidden', phase !== 'greet' || kchatPresets.length === 0);
   kcEl('kchat-waiting').classList.toggle('hidden', phase !== 'waiting');
   kcEl('kchat-ended').classList.toggle('hidden', phase !== 'ended');
   kcEl('kchat-form').classList.toggle('hidden', phase === 'ended');
@@ -1302,7 +1304,23 @@ kcEl('kchat-launcher-btn').addEventListener('click', () => { kc.open = true; kc.
 kcEl('kchat-lightbox').addEventListener('click', () => { kcEl('kchat-lightbox').classList.add('hidden'); kcEl('kchat-lightbox-img').removeAttribute('src'); });
 kcEl('kchat-min').addEventListener('click', () => { kc.open = false; if (kc.ended) kc.ended = false; renderKchat(); });
 kcEl('kchat-new').addEventListener('click', () => { kc.ended = false; renderKchat(); });
-document.querySelectorAll('#kchat-quick button').forEach((b) => b.addEventListener('click', () => kchatSend(b.textContent)));
+// Preset messages come from Admin > Configuration > Kiosk chat. Buttons are rebuilt whenever the settings are read.
+function renderKchatPresets(list) {
+  kchatPresets = list.slice(0, 6);
+  const box = kcEl('kchat-quick');
+  box.textContent = '';
+  kchatPresets.forEach((text) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    box.appendChild(b);
+  });
+  if (typeof renderKchat === 'function' && kc) renderKchat();
+}
+kcEl('kchat-quick').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b) kchatSend(b.textContent);
+});
 kcEl('kchat-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = kcEl('kchat-input');

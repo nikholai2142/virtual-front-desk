@@ -555,7 +555,7 @@ function sanitizeRichText(input) {
 }
 
 const DEFAULT_CONSENT_BODY = "Please be informed that all video-call sessions conducted through this kiosk are automatically recorded, including video and audio, for service quality assurance, security, training and dispute resolution purposes.\n\nBy proceeding, you consent to the activation of the kiosk's camera and microphone, the recording of your video-call session, and the collection and processing of your personal information.\n\nAll recordings and personal information will be securely maintained, accessible only to authorised personnel and retained in accordance with our data retention policy and the Personal Data Protection Act 2010 (Malaysia).\n\nYou may terminate the video call at any time.\n\nBy selecting **“I Agree & Continue”**, you acknowledge that you have read, understood and consented to the above Privacy Notice and our Privacy Policy.\n\nIf you do not consent, please select “Decline” and seek assistance through an alternative customer service channel.";
-const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false, consentEnabled: true, footerEnabled: true, footerTagline: 'Your privacy, security and comfort are important to us.', footerPrivacyLabel: 'Privacy Policy', footerPrivacyBody: '', footerTermsLabel: 'Terms & Conditions of Use', footerTermsBody: '', footerCopyright: '\u00a9 {year} All rights reserved.', consentTitle: 'Privacy Notice & Consent', consentIntro: 'Your privacy is important to us.', consentBody: DEFAULT_CONSENT_BODY, consentAgreeLabel: 'I Agree & Continue', consentDeclineLabel: 'Decline', kioskChatProvider: 'builtin', kioskChatScriptUrl: 'https://tools.roomie.my/webchat/1575/webchat.js' }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false, consentEnabled: true, footerEnabled: true, footerTagline: 'Your privacy, security and comfort are important to us.', footerPrivacyLabel: 'Privacy Policy', footerPrivacyBody: '', footerTermsLabel: 'Terms & Conditions of Use', footerTermsBody: '', footerCopyright: '\u00a9 {year} All rights reserved.', consentTitle: 'Privacy Notice & Consent', consentIntro: 'Your privacy is important to us.', consentBody: DEFAULT_CONSENT_BODY, consentAgreeLabel: 'I Agree & Continue', consentDeclineLabel: 'Decline', kioskChatPresets: ['I have a question', 'I need something for my room'], kioskChatProvider: 'builtin', kioskChatScriptUrl: 'https://tools.roomie.my/webchat/1575/webchat.js' }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
 const MIN_LOGO_SIZE_PX = 24;
@@ -1770,6 +1770,7 @@ function handleCallConfig(req, res) {
       termsLabel: CONFIG.footerTermsLabel,
       termsBody: CONFIG.footerTermsBody,
     },
+    kioskChatPresets: Array.isArray(CONFIG.kioskChatPresets) ? CONFIG.kioskChatPresets : DEFAULT_CONFIG.kioskChatPresets,
     kioskChatProvider: CONFIG.kioskChatProvider === 'external' && CONFIG.kioskChatScriptUrl ? 'external' : 'builtin',
     kioskChatScriptUrl: CONFIG.kioskChatProvider === 'external' ? CONFIG.kioskChatScriptUrl : '',
     languages,
@@ -2727,6 +2728,21 @@ async function handleAdminApi(req, res, urlObj) {
       if (!v && !allowEmpty) { sendJson(res, 400, { error: `${label} cannot be empty` }); return; }
       if (v.length > max) { sendJson(res, 400, { error: `${label} is too long (max ${max} characters)` }); return; }
       next[key] = v;
+    }
+
+    if (body.kioskChatPresets !== undefined) {
+      if (!Array.isArray(body.kioskChatPresets) || body.kioskChatPresets.length > 6) {
+        sendJson(res, 400, { error: 'Use up to 6 preset messages' });
+        return;
+      }
+      const presets = [];
+      for (const item of body.kioskChatPresets) {
+        const t = String(item == null ? '' : item).replace(/\s+/g, ' ').trim();
+        if (!t) continue; // blank rows are ignored
+        if (t.length > 80) { sendJson(res, 400, { error: 'A preset message can be at most 80 characters' }); return; }
+        if (!presets.includes(t)) presets.push(t);
+      }
+      next.kioskChatPresets = presets;
     }
 
     if (body.kioskChatProvider !== undefined || body.kioskChatScriptUrl !== undefined) {

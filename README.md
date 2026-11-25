@@ -1524,3 +1524,7 @@ After a guest taps Start Video Call, the kiosk shows a Privacy Notice & Consent 
 ## Kiosk footer
 
 The kiosk's welcome and thank-you screens show a footer: a short line, two links (by default "Privacy Policy" and "Terms & Conditions of Use") and a copyright line. Tapping a link opens a pop-up with its text; it closes with the Close button or after 2 minutes. Edit everything in Admin → Configuration → Kiosk footer: the line, the link names, the text behind each link, the copyright (`{year}` becomes the current year) and an on/off switch. A link only appears once you have entered text for it. The two texts use the same formatting toolbar.
+
+## Chat preset messages
+
+Admin → Configuration → Kiosk chat → "Preset messages" sets the buttons guests can tap at the start of a built-in chat (up to 6, 80 characters each). Add, rename, reorder or remove them and press Save; kiosks pick the change up within a minute. With no presets the buttons are hidden.

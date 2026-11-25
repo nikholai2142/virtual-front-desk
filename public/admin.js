@@ -2326,6 +2326,56 @@ document.getElementById('consent-form').addEventListener('submit', async (e) => 
   }
 });
 
+// ---- Kiosk chat preset messages ----
+const MAX_PRESETS = 6;
+function renderPresetRows(values) {
+  const list = document.getElementById('kchat-presets-list');
+  list.textContent = '';
+  values.forEach((value) => addPresetRow(value));
+  updatePresetControls();
+}
+function addPresetRow(value) {
+  const list = document.getElementById('kchat-presets-list');
+  const row = document.createElement('div');
+  row.className = 'preset-row';
+  row.style.cssText = 'display: flex; gap: 6px; align-items: center; margin-top: 8px;';
+  const input = document.createElement('input');
+  input.type = 'text'; input.maxLength = 80; input.value = value || '';
+  input.setAttribute('aria-label', 'Preset message');
+  input.style.cssText = 'flex: 1; min-width: 220px;';
+  const mk = (label, title, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn'; b.textContent = label; b.title = title; b.setAttribute('aria-label', title);
+    b.addEventListener('click', fn);
+    return b;
+  };
+  row.append(
+    input,
+    mk('Up', 'Move up', () => { if (row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling); updatePresetControls(); }),
+    mk('Down', 'Move down', () => { if (row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row); updatePresetControls(); }),
+    mk('Remove', 'Remove', () => { row.remove(); updatePresetControls(); })
+  );
+  list.appendChild(row);
+}
+function updatePresetControls() {
+  const rows = document.querySelectorAll('#kchat-presets-list .preset-row');
+  document.getElementById('kchat-presets-add').disabled = rows.length >= MAX_PRESETS;
+  rows.forEach((r, i) => {
+    const [, up, down] = r.querySelectorAll('button');
+    up.disabled = i === 0;
+    down.disabled = i === rows.length - 1;
+  });
+}
+function readPresetRows() {
+  return Array.from(document.querySelectorAll('#kchat-presets-list input')).map((i) => i.value.trim()).filter(Boolean);
+}
+document.getElementById('kchat-presets-add').addEventListener('click', () => {
+  addPresetRow('');
+  updatePresetControls();
+  const inputs = document.querySelectorAll('#kchat-presets-list input');
+  inputs[inputs.length - 1].focus();
+});
+
 // ---- Kiosk chat provider ----
 function syncKioskChatUrlRow() {
   document.getElementById('kiosk-chat-url-row').style.display = document.getElementById('kiosk-chat-external').checked ? '' : 'none';
@@ -2339,8 +2389,9 @@ document.getElementById('kiosk-chat-form').addEventListener('submit', async (e) 
   okEl.classList.add('hidden');
   const kioskChatProvider = document.getElementById('kiosk-chat-external').checked ? 'external' : 'builtin';
   const kioskChatScriptUrl = document.getElementById('kiosk-chat-url').value.trim();
+  const kioskChatPresets = readPresetRows();
   try {
-    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ kioskChatProvider, kioskChatScriptUrl }) });
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ kioskChatProvider, kioskChatScriptUrl, kioskChatPresets }) });
     warnIfNotPersisted(result);
     okEl.textContent = 'Saved. Kiosks will switch within a minute.';
     okEl.classList.remove('hidden');
@@ -2372,6 +2423,7 @@ async function loadRecordingConfig() {
     richSet('consent-body', cc.consentBody);
     document.getElementById('consent-agree-label').value = cc.consentAgreeLabel || '';
     document.getElementById('consent-decline-label').value = cc.consentDeclineLabel || '';
+    renderPresetRows(Array.isArray(cc.kioskChatPresets) ? cc.kioskChatPresets : []);
     const ext = data.config.kioskChatProvider === 'external';
     document.getElementById('kiosk-chat-external').checked = ext;
     document.getElementById('kiosk-chat-builtin').checked = !ext;
