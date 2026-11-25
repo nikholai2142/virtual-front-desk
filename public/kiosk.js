@@ -64,7 +64,17 @@ function updateKioskFooterVisibility() {
   const onScreen = !!kioskName && !!screens['screen-idle'] && (screens['screen-idle'].classList.contains('active') || screens['screen-ended'].classList.contains('active'));
   const hasContent = !!footerConfig && footerConfig.enabled && (footerConfig.tagline || footerConfig.copyright || footerConfig.privacyBody || footerConfig.termsBody);
   el.classList.toggle('hidden', !(onScreen && hasContent));
+  setFooterHeightVar();
 }
+
+/** Tells the CSS how tall the footer is, so screens leave room for it instead of sitting underneath. */
+function setFooterHeightVar() {
+  const el = document.getElementById('kiosk-footer');
+  const h = el && !el.classList.contains('hidden') ? el.offsetHeight : 0;
+  document.documentElement.style.setProperty('--footer-h', h + 'px');
+}
+window.addEventListener('resize', setFooterHeightVar);
+if (window.ResizeObserver) new ResizeObserver(setFooterHeightVar).observe(document.getElementById('kiosk-footer'));
 
 let kfModalTimer = null;
 function openKioskFooterDoc(title, body) {

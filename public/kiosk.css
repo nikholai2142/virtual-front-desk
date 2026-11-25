@@ -52,6 +52,8 @@ html, body {
   align-items: center;
   justify-content: center;
   padding: 40px;
+  /* keep content clear of the footer (--footer-h is measured in kiosk.js) */
+  padding-bottom: calc(40px + var(--footer-h, 0px));
   text-align: center;
 }
 .screen.active { display: flex; }
@@ -60,7 +62,7 @@ html, body {
    Configuration > Kiosk appearance setting) with a 72px fallback so the
    logo still renders at a sane size before that fetch resolves, or if it
    fails. */
-.brand-mark { width: var(--logo-size, 72px); height: var(--logo-size, 72px); margin-bottom: 8px; object-fit: contain; }
+.brand-mark { width: var(--logo-size, 72px); height: auto; max-height: 28vh; margin-bottom: 8px; object-fit: contain; } /* height follows the logo's own shape, so a wide logo has no empty space above or below it */
 h1 { font-size: 44px; margin: 0 0 8px; }
 h2 { font-size: 30px; margin: 16px 0 4px; }
 .sub { color: var(--sub); font-size: 18px; margin: 0 0 24px; }
@@ -165,14 +167,15 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 
 .kiosk-footer {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  padding: 14px 120px 14px; box-sizing: border-box; text-align: center;
+  padding: 10px 120px 10px; box-sizing: border-box; text-align: center;
   border-top: 1px solid var(--border); background: var(--bg, #fff);
   color: var(--sub); font-size: 14px; line-height: 1.4;
 }
 .kiosk-footer p { margin: 0; }
+#screen-idle, #screen-ended { overflow-y: auto; }
 .kf-tagline { margin-bottom: 4px !important; }
 .kf-links { margin: 2px 0 !important; }
-.kf-link { background: none; border: 0; padding: 6px 8px; font: inherit; font-size: 16px; color: var(--accent); text-decoration: underline; cursor: pointer; }
+.kf-link { background: none; border: 0; padding: 4px 8px; font: inherit; font-size: 16px; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .kf-sep { color: var(--sub); }
 .kf-copy { font-size: 13px; opacity: .85; }
 .modal-card.kf-modal-card { max-width: 720px; width: calc(100% - 32px); }
@@ -600,3 +603,13 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 .kchat-lightbox.hidden { display: none; }
 .kchat-lightbox img { max-width: 94vw; max-height: 84vh; border-radius: 12px; }
 .kchat-lightbox-hint { color: #fff; font-size: 16px; opacity: .85; }
+
+/* Short screens (e.g. a tablet in landscape): tighten the welcome screen so the
+   kiosk ID / sign-out line still fits above the footer. */
+@media (max-height: 720px) {
+  .brand-mark { max-height: 14vh; }
+  h1 { font-size: 36px; }
+  .sub { margin-bottom: 12px; }
+  .start-call-btn { padding: 24px 56px; margin-top: 8px; }
+  .footnote { margin-top: 14px; }
+}
