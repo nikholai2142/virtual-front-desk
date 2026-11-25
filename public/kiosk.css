@@ -175,7 +175,7 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 .kf-link { background: none; border: 0; padding: 6px 8px; font: inherit; font-size: 16px; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .kf-sep { color: var(--sub); }
 .kf-copy { font-size: 13px; opacity: .85; }
-.kf-modal-card { max-width: 720px; width: calc(100% - 32px); }
+.modal-card.kf-modal-card { max-width: 720px; width: calc(100% - 32px); }
 .kf-modal-card .consent-text { max-height: 52vh; margin-bottom: 8px; }
 .consent-card { max-width: 720px; width: 100%; }
 .consent-text {
@@ -186,6 +186,10 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
 }
 .consent-text p { margin: 0 0 12px; }
 .consent-text p:last-child { margin-bottom: 0; }
+.consent-text div { margin: 0 0 12px; }
+.consent-text ul, .consent-text ol { margin: 0 0 12px; padding-left: 30px; }
+.consent-text blockquote { margin: 0 0 0 32px; padding: 0; border: 0; }
+.consent-text li { margin: 2px 0; }
 .consent-actions { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
 .consent-actions .btn { min-height: 56px; padding: 0 32px; font-size: 18px; }
 

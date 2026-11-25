@@ -27,6 +27,7 @@ let consentConfig = null; // from /api/call-config; null = use the text already 
 /** Paragraphs are separated by a blank line; **bold** is the only formatting. Built with DOM nodes, never innerHTML. */
 function fillConsentText(box, text) {
   box.textContent = '';
+  if (window.RichText && RichText.looksLikeHtml(text)) { box.innerHTML = RichText.sanitize(text); return; } // formatted text from the admin editor, filtered again here
   String(text || '').split(/\n\s*\n/).forEach((para) => {
     const p = document.createElement('p');
     para.trim().split(/(\*\*[^*]+\*\*)/).forEach((part) => {

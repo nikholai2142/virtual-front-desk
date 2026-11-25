@@ -467,6 +467,93 @@ function readLegacyAdminPassword() {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
+// ---- Rich text (consent notice, footer pop-ups) -------------------------
+// The admin editor produces simple HTML. This keeps only a fixed set of tags
+// and a few safe style properties, so whatever is stored can be shown on the
+// kiosk. (The kiosk and editor filter it again in public/richtext.js.)
+const RT_TAGS = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'span', 'div', 'blockquote']);
+const RT_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'noscript', 'template', 'svg', 'math', 'title', 'head']);
+const RT_FONT_STACKS = {
+  'arial': "Arial, Helvetica, sans-serif", 'georgia': 'Georgia, serif', 'times new roman': "'Times New Roman', Times, serif",
+  'verdana': 'Verdana, Geneva, sans-serif', 'trebuchet ms': "'Trebuchet MS', sans-serif", 'tahoma': 'Tahoma, Geneva, sans-serif',
+  'courier new': "'Courier New', monospace",
+};
+const RT_SIZE_KEYWORDS = { 'x-small': 10, small: 13, medium: 16, large: 18, 'x-large': 24, 'xx-large': 32, 'xxx-large': 48 };
+function rtCleanStyle(text) {
+  const out = [];
+  String(text || '').split(';').forEach((decl) => {
+    const i = decl.indexOf(':');
+    if (i < 0) return;
+    const prop = decl.slice(0, i).trim().toLowerCase();
+    const val = decl.slice(i + 1).trim();
+    if (prop === 'color') {
+      if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(val)) out.push('color: ' + val);
+      else {
+        const m = val.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*[\d.]+\s*)?\)$/i);
+        if (m) out.push(`color: rgb(${Math.min(255, +m[1])}, ${Math.min(255, +m[2])}, ${Math.min(255, +m[3])})`);
+      }
+    } else if (prop === 'font-size') {
+      const v = val.toLowerCase();
+      if (RT_SIZE_KEYWORDS[v]) out.push(`font-size: ${RT_SIZE_KEYWORDS[v]}px`);
+      else { const m = v.match(/^(\d+(?:\.\d+)?)px$/); if (m && Math.round(+m[1]) >= 8 && Math.round(+m[1]) <= 96) out.push(`font-size: ${Math.round(+m[1])}px`); }
+    } else if (prop === 'font-family') {
+      const first = val.split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+      if (RT_FONT_STACKS[first]) out.push('font-family: ' + RT_FONT_STACKS[first]);
+    } else if (prop === 'text-align' && /^(left|center|right|justify)$/i.test(val)) out.push('text-align: ' + val.toLowerCase());
+    else if (prop === 'font-weight' && /^(bold|700|800|900)$/i.test(val)) out.push('font-weight: bold');
+    else if (prop === 'font-style' && /^italic$/i.test(val)) out.push('font-style: italic');
+    else if (prop === 'text-decoration' && /^underline$/i.test(val)) out.push('text-decoration: underline');
+  });
+  return out.join('; ');
+}
+function rtLooksLikeHtml(t) { return /<\/?[a-zA-Z][^>]*>/.test(String(t || '')); }
+function rtIsEmpty(html) { return !String(html || '').replace(/<[^>]*>/g, '').replace(/&nbsp;|\s/g, ''); }
+/** Whitelist-based HTML cleaner (no DOM on the server, so a small tokenizer). Plain text with no tags is returned unchanged. */
+function sanitizeRichText(input) {
+  const src = String(input || '');
+  if (!rtLooksLikeHtml(src)) return src;
+  const re = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^'">])*)>|<|[^<]+/g;
+  let out = '';
+  let skipDepth = 0, skipTag = null;
+  let m;
+  while ((m = re.exec(src))) {
+    const tok = m[0];
+    if (tok.startsWith('<!--')) continue;
+    if (m[2] === undefined) { // text (or a stray "<")
+      if (skipDepth) continue;
+      out += tok === '<' ? '&lt;' : tok.replace(/>/g, '&gt;');
+      continue;
+    }
+    const closing = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    if (skipDepth) {
+      if (tag === skipTag) skipDepth += closing ? -1 : 1;
+      continue;
+    }
+    if (RT_DROP.has(tag)) { if (!closing) { skipDepth = 1; skipTag = tag; } continue; }
+    if (tag === 'font') { // old-style tags from some browsers -> a span with safe styles
+      if (closing) { out += '</span>'; continue; }
+      const attrs = m[3];
+      const get = (n) => { const a = attrs.match(new RegExp('\\b' + n + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i')); return a ? (a[1] ?? a[2] ?? a[3] ?? '') : ''; };
+      const decls = [];
+      if (get('face')) decls.push('font-family: ' + get('face'));
+      if (get('color')) decls.push('color: ' + get('color'));
+      const sz = { 1: 10, 2: 13, 3: 16, 4: 18, 5: 24, 6: 32, 7: 48 }[get('size')];
+      if (sz) decls.push('font-size: ' + sz + 'px');
+      const st = rtCleanStyle(decls.join('; '));
+      out += st ? `<span style="${st}">` : '<span>';
+      continue;
+    }
+    if (!RT_TAGS.has(tag)) continue; // unknown tag: drop the tag, keep its contents
+    if (closing) { if (tag !== 'br') out += `</${tag}>`; continue; }
+    if (tag === 'br') { out += '<br>'; continue; }
+    const sm = m[3].match(/\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const st = sm ? rtCleanStyle(sm[1] ?? sm[2]) : '';
+    out += st ? `<${tag} style="${st}">` : `<${tag}>`;
+  }
+  return out;
+}
+
 const DEFAULT_CONSENT_BODY = "Please be informed that all video-call sessions conducted through this kiosk are automatically recorded, including video and audio, for service quality assurance, security, training and dispute resolution purposes.\n\nBy proceeding, you consent to the activation of the kiosk's camera and microphone, the recording of your video-call session, and the collection and processing of your personal information.\n\nAll recordings and personal information will be securely maintained, accessible only to authorised personnel and retained in accordance with our data retention policy and the Personal Data Protection Act 2010 (Malaysia).\n\nYou may terminate the video call at any time.\n\nBy selecting **“I Agree & Continue”**, you acknowledge that you have read, understood and consented to the above Privacy Notice and our Privacy Policy.\n\nIf you do not consent, please select “Decline” and seek assistance through an alternative customer service channel.";
 const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false, consentEnabled: true, footerEnabled: true, footerTagline: 'Your privacy, security and comfort are important to us.', footerPrivacyLabel: 'Privacy Policy', footerPrivacyBody: '', footerTermsLabel: 'Terms & Conditions of Use', footerTermsBody: '', footerCopyright: '\u00a9 {year} All rights reserved.', consentTitle: 'Privacy Notice & Consent', consentIntro: 'Your privacy is important to us.', consentBody: DEFAULT_CONSENT_BODY, consentAgreeLabel: 'I Agree & Continue', consentDeclineLabel: 'Decline', kioskChatProvider: 'builtin', kioskChatScriptUrl: 'https://tools.roomie.my/webchat/1575/webchat.js' }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
@@ -2602,12 +2689,17 @@ async function handleAdminApi(req, res, urlObj) {
     for (const [key, label, max, allowEmpty] of [
       ['consentTitle', 'Title', 120, false],
       ['consentIntro', 'Opening line', 200, true],
-      ['consentBody', 'Notice text', 8000, false],
+      ['consentBody', 'Notice text', 30000, false],
       ['consentAgreeLabel', 'Agree button', 40, false],
       ['consentDeclineLabel', 'Decline button', 40, false],
     ]) {
       if (body[key] === undefined) continue;
-      const v = String(body[key]).replace(/\r\n/g, '\n').trim();
+      let v = String(body[key]).replace(/\r\n/g, '\n').trim();
+      if (key === 'consentBody') {
+        if (v.length > 60000) { sendJson(res, 400, { error: `${label} is too long` }); return; }
+        v = sanitizeRichText(v).trim();
+        if (rtIsEmpty(v)) v = '';
+      }
       if (!v && !allowEmpty) { sendJson(res, 400, { error: `${label} cannot be empty` }); return; }
       if (v.length > max) { sendJson(res, 400, { error: `${label} is too long (max ${max} characters)` }); return; }
       next[key] = v;
@@ -2620,13 +2712,18 @@ async function handleAdminApi(req, res, urlObj) {
     for (const [key, label, max, allowEmpty] of [
       ['footerTagline', 'Footer line', 200, true],
       ['footerPrivacyLabel', 'Privacy link name', 60, false],
-      ['footerPrivacyBody', 'Privacy Policy text', 20000, true],
+      ['footerPrivacyBody', 'Privacy Policy text', 60000, true],
       ['footerTermsLabel', 'Terms link name', 60, false],
-      ['footerTermsBody', 'Terms text', 20000, true],
+      ['footerTermsBody', 'Terms text', 60000, true],
       ['footerCopyright', 'Copyright line', 200, true],
     ]) {
       if (body[key] === undefined) continue;
-      const v = String(body[key]).replace(/\r\n/g, '\n').trim();
+      let v = String(body[key]).replace(/\r\n/g, '\n').trim();
+      if (key === 'footerPrivacyBody' || key === 'footerTermsBody') {
+        if (v.length > 100000) { sendJson(res, 400, { error: `${label} is too long` }); return; }
+        v = sanitizeRichText(v).trim();
+        if (rtIsEmpty(v)) v = '';
+      }
       if (!v && !allowEmpty) { sendJson(res, 400, { error: `${label} cannot be empty` }); return; }
       if (v.length > max) { sendJson(res, 400, { error: `${label} is too long (max ${max} characters)` }); return; }
       next[key] = v;

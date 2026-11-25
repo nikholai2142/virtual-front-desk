@@ -2264,6 +2264,12 @@ document.getElementById('btn-export-status-pdf').addEventListener('click', () =>
 });
 
 
+// ---- Formatting editors (privacy notice, footer pop-up texts) ----
+function richEditor(id) { const t = document.getElementById(id); return t._rte || RichText.attach(t); }
+function richVal(id) { return richEditor(id).getValue(); }
+function richSet(id, value) { richEditor(id).setValue(value || ''); }
+['consent-body', 'footer-privacy-body', 'footer-terms-body'].forEach((id) => richEditor(id));
+
 // ---- Kiosk footer ----
 document.getElementById('footer-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2276,9 +2282,9 @@ document.getElementById('footer-form').addEventListener('submit', async (e) => {
     footerEnabled: document.getElementById('footer-enabled').checked,
     footerTagline: v('footer-tagline'),
     footerPrivacyLabel: v('footer-privacy-label'),
-    footerPrivacyBody: v('footer-privacy-body'),
+    footerPrivacyBody: richVal('footer-privacy-body'),
     footerTermsLabel: v('footer-terms-label'),
-    footerTermsBody: v('footer-terms-body'),
+    footerTermsBody: richVal('footer-terms-body'),
     footerCopyright: v('footer-copyright'),
   };
   try {
@@ -2304,7 +2310,7 @@ document.getElementById('consent-form').addEventListener('submit', async (e) => 
     consentEnabled: document.getElementById('consent-enabled').checked,
     consentTitle: document.getElementById('consent-title').value,
     consentIntro: document.getElementById('consent-intro').value,
-    consentBody: document.getElementById('consent-body').value,
+    consentBody: richVal('consent-body'),
     consentAgreeLabel: document.getElementById('consent-agree-label').value,
     consentDeclineLabel: document.getElementById('consent-decline-label').value,
   };
@@ -2356,14 +2362,14 @@ async function loadRecordingConfig() {
     document.getElementById('footer-enabled').checked = cc.footerEnabled !== false;
     document.getElementById('footer-tagline').value = cc.footerTagline || '';
     document.getElementById('footer-privacy-label').value = cc.footerPrivacyLabel || '';
-    document.getElementById('footer-privacy-body').value = cc.footerPrivacyBody || '';
+    richSet('footer-privacy-body', cc.footerPrivacyBody);
     document.getElementById('footer-terms-label').value = cc.footerTermsLabel || '';
-    document.getElementById('footer-terms-body').value = cc.footerTermsBody || '';
+    richSet('footer-terms-body', cc.footerTermsBody);
     document.getElementById('footer-copyright').value = cc.footerCopyright || '';
     document.getElementById('consent-enabled').checked = cc.consentEnabled !== false;
     document.getElementById('consent-title').value = cc.consentTitle || '';
     document.getElementById('consent-intro').value = cc.consentIntro || '';
-    document.getElementById('consent-body').value = cc.consentBody || '';
+    richSet('consent-body', cc.consentBody);
     document.getElementById('consent-agree-label').value = cc.consentAgreeLabel || '';
     document.getElementById('consent-decline-label').value = cc.consentDeclineLabel || '';
     const ext = data.config.kioskChatProvider === 'external';
