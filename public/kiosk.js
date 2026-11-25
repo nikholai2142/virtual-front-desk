@@ -19,6 +19,80 @@ async function getIceServers() {
 
 const WAIT_WARNING_MS = 60 * 1000;
 const IDLE_RESET_MS = 4000;
+const CONSENT_IDLE_MS = 90 * 1000; // an unattended consent screen returns to the welcome screen
+let consentIdleHandle = null;
+let footerConfig = null; // from /api/call-config (Admin > Configuration > Kiosk footer)
+let consentConfig = null; // from /api/call-config; null = use the text already in kiosk.html
+
+/** Paragraphs are separated by a blank line; **bold** is the only formatting. Built with DOM nodes, never innerHTML. */
+function fillConsentText(box, text) {
+  box.textContent = '';
+  String(text || '').split(/\n\s*\n/).forEach((para) => {
+    const p = document.createElement('p');
+    para.trim().split(/(\*\*[^*]+\*\*)/).forEach((part) => {
+      if (/^\*\*[^*]+\*\*$/.test(part)) { const b = document.createElement('strong'); b.textContent = part.slice(2, -2); p.appendChild(b); }
+      else if (part) p.appendChild(document.createTextNode(part));
+    });
+    if (p.childNodes.length) box.appendChild(p);
+  });
+}
+
+function renderKioskFooter() {
+  const f = footerConfig;
+  const el = document.getElementById('kiosk-footer');
+  if (!f || !f.enabled) { el.classList.add('hidden'); el.dataset.off = '1'; return; }
+  delete el.dataset.off;
+  const tag = document.getElementById('kiosk-footer-tagline');
+  tag.textContent = f.tagline || '';
+  tag.classList.toggle('hidden', !f.tagline);
+  const showP = !!f.privacyBody, showT = !!f.termsBody;
+  const pBtn = document.getElementById('kf-privacy'), tBtn = document.getElementById('kf-terms');
+  pBtn.textContent = f.privacyLabel; pBtn.classList.toggle('hidden', !showP);
+  tBtn.textContent = f.termsLabel; tBtn.classList.toggle('hidden', !showT);
+  document.getElementById('kf-sep').classList.toggle('hidden', !(showP && showT));
+  document.querySelector('.kf-links').classList.toggle('hidden', !(showP || showT));
+  const copy = document.getElementById('kiosk-footer-copy');
+  copy.textContent = String(f.copyright || '').replace(/\{year\}/g, String(new Date().getFullYear()));
+  copy.classList.toggle('hidden', !f.copyright);
+  updateKioskFooterVisibility();
+}
+
+function updateKioskFooterVisibility() {
+  const el = document.getElementById('kiosk-footer');
+  if (!el) return;
+  const onScreen = !!kioskName && !!screens['screen-idle'] && (screens['screen-idle'].classList.contains('active') || screens['screen-ended'].classList.contains('active'));
+  const hasContent = !!footerConfig && footerConfig.enabled && (footerConfig.tagline || footerConfig.copyright || footerConfig.privacyBody || footerConfig.termsBody);
+  el.classList.toggle('hidden', !(onScreen && hasContent));
+}
+
+let kfModalTimer = null;
+function openKioskFooterDoc(title, body) {
+  document.getElementById('kf-modal-title').textContent = title;
+  fillConsentText(document.getElementById('kf-modal-body'), body);
+  document.getElementById('kf-modal').classList.remove('hidden');
+  document.getElementById('kf-modal-body').scrollTop = 0;
+  clearTimeout(kfModalTimer);
+  kfModalTimer = setTimeout(closeKioskFooterDoc, 120 * 1000); // an unattended kiosk goes back to normal
+}
+function closeKioskFooterDoc() {
+  clearTimeout(kfModalTimer);
+  document.getElementById('kf-modal').classList.add('hidden');
+}
+document.getElementById('kf-privacy').addEventListener('click', () => footerConfig && openKioskFooterDoc(footerConfig.privacyLabel, footerConfig.privacyBody));
+document.getElementById('kf-terms').addEventListener('click', () => footerConfig && openKioskFooterDoc(footerConfig.termsLabel, footerConfig.termsBody));
+document.getElementById('kf-modal-close').addEventListener('click', closeKioskFooterDoc);
+
+function renderConsentScreen() {
+  const c = consentConfig;
+  if (!c || !c.enabled) return;
+  document.getElementById('consent-title').textContent = c.title;
+  const intro = document.getElementById('consent-intro');
+  intro.textContent = c.intro || '';
+  intro.classList.toggle('hidden', !c.intro);
+  fillConsentText(document.getElementById('consent-text'), c.body);
+  document.getElementById('btn-consent-agree').textContent = c.agreeLabel;
+  document.getElementById('btn-consent-decline').textContent = c.declineLabel;
+}
 // The rating prompt gets much longer than a plain "call ended" screen, since
 // a guest needs time to tap stars and type optional remarks. If they never
 // interact, this is the fallback that still returns the kiosk to idle.
@@ -169,6 +243,8 @@ function showScreen(id) {
   Object.values(screens).forEach((el) => el.classList.remove('active'));
   screens[id].classList.add('active');
   updateKchatVisibility();
+  updateKioskFooterVisibility();
+  if (!screens['screen-idle'].classList.contains('active') && !screens['screen-ended'].classList.contains('active')) closeKioskFooterDoc();
 }
 
 // ---- Per-kiosk branding --------------------------------------------------
@@ -282,6 +358,8 @@ async function loadCallConfig() {
     // the login and idle screens' logos in one place. Falls back to
     // kiosk.css's own 72px default if this is missing/invalid.
     applyKioskChatProvider(data.kioskChatProvider, data.kioskChatScriptUrl);
+    if (data.consent) consentConfig = data.consent;
+    if (data.footer) { footerConfig = data.footer; renderKioskFooter(); }
     const logoSize = Number(data.logoSizePx);
     if (Number.isFinite(logoSize) && logoSize > 0) {
       document.documentElement.style.setProperty('--logo-size', `${logoSize}px`);
@@ -946,7 +1024,28 @@ document.getElementById('btn-start-call').addEventListener('click', async (e) =>
   // picker even shows at all (maybeShowLanguageScreen skips it for a
   // single-language result).
   await loadCallConfig();
-  maybeShowLanguageScreen(topic);
+  // Privacy Notice & Consent comes first; the language screen (or, with a
+  // single language, the connection) only follows once the guest agrees.
+  pendingTopic = topic;
+  if (consentConfig && consentConfig.enabled === false) { maybeShowLanguageScreen(topic); return; } // admin turned the notice off
+  renderConsentScreen();
+  showScreen('screen-consent');
+  document.getElementById('consent-text').scrollTop = 0;
+  clearTimeout(consentIdleHandle);
+  consentIdleHandle = setTimeout(() => {
+    if (screens['screen-consent'].classList.contains('active')) { pendingTopic = null; resetToIdle(); }
+  }, CONSENT_IDLE_MS);
+});
+
+document.getElementById('btn-consent-agree').addEventListener('click', () => {
+  clearTimeout(consentIdleHandle);
+  maybeShowLanguageScreen(pendingTopic || 'Front Desk');
+});
+
+document.getElementById('btn-consent-decline').addEventListener('click', () => {
+  clearTimeout(consentIdleHandle);
+  pendingTopic = null;
+  resetToIdle();
 });
 
 document.getElementById('btn-cancel-language').addEventListener('click', () => {

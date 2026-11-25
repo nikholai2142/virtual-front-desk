@@ -1516,3 +1516,11 @@ Configuration → Recordings has a switch, "Let agents play recordings". It is *
 ## Kiosk chat provider
 
 Configuration → Kiosk chat lets you choose **Built-in chat** (default) or **External chat**. For External, paste the address from the provider's script line (must start with `https://`). The kiosk loads that script and shows its widget only on the idle and call-ended screens; the built-in chat button is hidden. Agents then answer in the provider's own inbox, so there are no chat alerts or history on the agent dashboard. Kiosks pick up a change within a minute while on the idle screen. The built-in chat is never removed; choose it again to switch back (the provider's widget is hidden at once).
+
+## Privacy notice & consent
+
+After a guest taps Start Video Call, the kiosk shows a Privacy Notice & Consent screen before the language screen. "I Agree & Continue" carries on as normal; "Decline" (or 90 seconds of no touch) returns to the welcome screen. Edit the title, opening line, text and button labels in Admin → Configuration → Privacy notice & consent. Separate paragraphs with a blank line; wrap words in `**double asterisks**` for bold. You can also switch the notice off there. The notice is English only.
+
+## Kiosk footer
+
+The kiosk's welcome and thank-you screens show a footer: a short line, two links (by default "Privacy Policy" and "Terms & Conditions of Use") and a copyright line. Tapping a link opens a pop-up with its text; it closes with the Close button or after 2 minutes. Edit everything in Admin → Configuration → Kiosk footer: the line, the link names, the text behind each link, the copyright (`{year}` becomes the current year) and an on/off switch. A link only appears once you have entered text for it. Separate paragraphs with a blank line; `**double asterisks**` make bold text.

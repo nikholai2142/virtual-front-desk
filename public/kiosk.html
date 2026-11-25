@@ -43,6 +43,22 @@
     </p>
   </section>
 
+  <!-- PRIVACY NOTICE & CONSENT: shown after "Start Video Call", before the
+       language screen. "I Agree & Continue" carries on as normal; "Decline"
+       returns to the welcome screen. -->
+  <section id="screen-consent" class="screen">
+    <div class="center-card consent-card">
+      <h2 id="consent-title">Privacy Notice &amp; Consent</h2>
+      <p id="consent-intro" class="sub">Your privacy is important to us.</p>
+      <!-- Text is filled in from Admin > Configuration > Privacy notice & consent -->
+      <div id="consent-text" class="consent-text" tabindex="0"></div>
+      <div class="consent-actions">
+        <button id="btn-consent-agree" type="button" class="btn btn-primary">I Agree &amp; Continue</button>
+        <button id="btn-consent-decline" type="button" class="btn btn-ghost">Decline</button>
+      </div>
+    </div>
+  </section>
+
   <!-- LANGUAGE: guest picks which language to be connected in, so the
        queue can route them to (or transfer them to) an agent who speaks
        it. Skipped automatically if only one language is configured — see
@@ -230,6 +246,27 @@
         <button type="submit" class="btn btn-primary">Sign Out</button>
       </div>
     </form>
+  </div>
+
+  <!-- FOOTER: tagline, Privacy Policy / Terms links, copyright. Shown on the
+       idle and thank-you screens. All text comes from Admin > Configuration >
+       Kiosk footer (see renderKioskFooter() in kiosk.js). -->
+  <footer id="kiosk-footer" class="kiosk-footer hidden">
+    <p id="kiosk-footer-tagline" class="kf-tagline"></p>
+    <p class="kf-links">
+      <button type="button" id="kf-privacy" class="kf-link hidden"></button>
+      <span id="kf-sep" class="kf-sep hidden" aria-hidden="true">|</span>
+      <button type="button" id="kf-terms" class="kf-link hidden"></button>
+    </p>
+    <p id="kiosk-footer-copy" class="kf-copy"></p>
+  </footer>
+
+  <div id="kf-modal" class="modal-overlay hidden">
+    <div class="modal-card kf-modal-card" role="dialog" aria-modal="true" aria-labelledby="kf-modal-title">
+      <h2 id="kf-modal-title"></h2>
+      <div id="kf-modal-body" class="consent-text"></div>
+      <div class="modal-actions"><button type="button" id="kf-modal-close" class="btn btn-primary">Close</button></div>
+    </div>
   </div>
 
   <!-- KIOSK CHAT: live text chat with an agent. Shown on the idle / thank-you

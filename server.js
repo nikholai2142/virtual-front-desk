@@ -467,7 +467,8 @@ function readLegacyAdminPassword() {
 // as the admin password: a local config.json is the seed for a brand-new
 // Redis database and the fallback when Redis isn't configured.
 const CONFIG_FILE = path.join(__dirname, 'config.json');
-const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false, kioskChatProvider: 'builtin', kioskChatScriptUrl: 'https://tools.roomie.my/webchat/1575/webchat.js' }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
+const DEFAULT_CONSENT_BODY = "Please be informed that all video-call sessions conducted through this kiosk are automatically recorded, including video and audio, for service quality assurance, security, training and dispute resolution purposes.\n\nBy proceeding, you consent to the activation of the kiosk's camera and microphone, the recording of your video-call session, and the collection and processing of your personal information.\n\nAll recordings and personal information will be securely maintained, accessible only to authorised personnel and retained in accordance with our data retention policy and the Personal Data Protection Act 2010 (Malaysia).\n\nYou may terminate the video call at any time.\n\nBy selecting **“I Agree & Continue”**, you acknowledge that you have read, understood and consented to the above Privacy Notice and our Privacy Policy.\n\nIf you do not consent, please select “Decline” and seek assistance through an alternative customer service channel.";
+const DEFAULT_CONFIG = { maxHoldSeconds: 300, enabledLanguages: DEFAULT_ENABLED_LANGUAGES, logoSizePx: 72, recordingQuality: 'standard', recordingRetentionDays: 30, agentsCanPlayRecordings: false, consentEnabled: true, footerEnabled: true, footerTagline: 'Your privacy, security and comfort are important to us.', footerPrivacyLabel: 'Privacy Policy', footerPrivacyBody: '', footerTermsLabel: 'Terms & Conditions of Use', footerTermsBody: '', footerCopyright: '\u00a9 {year} All rights reserved.', consentTitle: 'Privacy Notice & Consent', consentIntro: 'Your privacy is important to us.', consentBody: DEFAULT_CONSENT_BODY, consentAgreeLabel: 'I Agree & Continue', consentDeclineLabel: 'Decline', kioskChatProvider: 'builtin', kioskChatScriptUrl: 'https://tools.roomie.my/webchat/1575/webchat.js' }; // 5 minutes hold, 72px logo (the original hardcoded kiosk.css value)
 const MIN_HOLD_SECONDS = 10;
 const MAX_HOLD_SECONDS = 3600; // 1 hour — generous ceiling, not a recommendation
 const MIN_LOGO_SIZE_PX = 24;
@@ -1665,6 +1666,23 @@ function handleCallConfig(req, res) {
     maxHoldSeconds: CONFIG.maxHoldSeconds,
     logoSizePx: CONFIG.logoSizePx,
     recordingQuality: RECORDING_QUALITIES.includes(CONFIG.recordingQuality) ? CONFIG.recordingQuality : 'standard',
+    consent: CONFIG.consentEnabled === false ? { enabled: false } : {
+      enabled: true,
+      title: CONFIG.consentTitle,
+      intro: CONFIG.consentIntro,
+      body: CONFIG.consentBody,
+      agreeLabel: CONFIG.consentAgreeLabel,
+      declineLabel: CONFIG.consentDeclineLabel,
+    },
+    footer: CONFIG.footerEnabled === false ? { enabled: false } : {
+      enabled: true,
+      tagline: CONFIG.footerTagline,
+      copyright: CONFIG.footerCopyright,
+      privacyLabel: CONFIG.footerPrivacyLabel,
+      privacyBody: CONFIG.footerPrivacyBody,
+      termsLabel: CONFIG.footerTermsLabel,
+      termsBody: CONFIG.footerTermsBody,
+    },
     kioskChatProvider: CONFIG.kioskChatProvider === 'external' && CONFIG.kioskChatScriptUrl ? 'external' : 'builtin',
     kioskChatScriptUrl: CONFIG.kioskChatProvider === 'external' ? CONFIG.kioskChatScriptUrl : '',
     languages,
@@ -2575,6 +2593,43 @@ async function handleAdminApi(req, res, urlObj) {
         return;
       }
       next.agentsCanPlayRecordings = body.agentsCanPlayRecordings;
+    }
+
+    if (body.consentEnabled !== undefined) {
+      if (typeof body.consentEnabled !== 'boolean') { sendJson(res, 400, { error: 'consentEnabled must be true or false' }); return; }
+      next.consentEnabled = body.consentEnabled;
+    }
+    for (const [key, label, max, allowEmpty] of [
+      ['consentTitle', 'Title', 120, false],
+      ['consentIntro', 'Opening line', 200, true],
+      ['consentBody', 'Notice text', 8000, false],
+      ['consentAgreeLabel', 'Agree button', 40, false],
+      ['consentDeclineLabel', 'Decline button', 40, false],
+    ]) {
+      if (body[key] === undefined) continue;
+      const v = String(body[key]).replace(/\r\n/g, '\n').trim();
+      if (!v && !allowEmpty) { sendJson(res, 400, { error: `${label} cannot be empty` }); return; }
+      if (v.length > max) { sendJson(res, 400, { error: `${label} is too long (max ${max} characters)` }); return; }
+      next[key] = v;
+    }
+
+    if (body.footerEnabled !== undefined) {
+      if (typeof body.footerEnabled !== 'boolean') { sendJson(res, 400, { error: 'footerEnabled must be true or false' }); return; }
+      next.footerEnabled = body.footerEnabled;
+    }
+    for (const [key, label, max, allowEmpty] of [
+      ['footerTagline', 'Footer line', 200, true],
+      ['footerPrivacyLabel', 'Privacy link name', 60, false],
+      ['footerPrivacyBody', 'Privacy Policy text', 20000, true],
+      ['footerTermsLabel', 'Terms link name', 60, false],
+      ['footerTermsBody', 'Terms text', 20000, true],
+      ['footerCopyright', 'Copyright line', 200, true],
+    ]) {
+      if (body[key] === undefined) continue;
+      const v = String(body[key]).replace(/\r\n/g, '\n').trim();
+      if (!v && !allowEmpty) { sendJson(res, 400, { error: `${label} cannot be empty` }); return; }
+      if (v.length > max) { sendJson(res, 400, { error: `${label} is too long (max ${max} characters)` }); return; }
+      next[key] = v;
     }
 
     if (body.kioskChatProvider !== undefined || body.kioskChatScriptUrl !== undefined) {

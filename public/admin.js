@@ -2264,6 +2264,62 @@ document.getElementById('btn-export-status-pdf').addEventListener('click', () =>
 });
 
 
+// ---- Kiosk footer ----
+document.getElementById('footer-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('footer-error');
+  const okEl = document.getElementById('footer-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const v = (id) => document.getElementById(id).value;
+  const body = {
+    footerEnabled: document.getElementById('footer-enabled').checked,
+    footerTagline: v('footer-tagline'),
+    footerPrivacyLabel: v('footer-privacy-label'),
+    footerPrivacyBody: v('footer-privacy-body'),
+    footerTermsLabel: v('footer-terms-label'),
+    footerTermsBody: v('footer-terms-body'),
+    footerCopyright: v('footer-copyright'),
+  };
+  try {
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify(body) });
+    warnIfNotPersisted(result);
+    okEl.textContent = 'Saved.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 3500);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
+// ---- Privacy notice & consent ----
+document.getElementById('consent-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('consent-error');
+  const okEl = document.getElementById('consent-success');
+  errEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  const body = {
+    consentEnabled: document.getElementById('consent-enabled').checked,
+    consentTitle: document.getElementById('consent-title').value,
+    consentIntro: document.getElementById('consent-intro').value,
+    consentBody: document.getElementById('consent-body').value,
+    consentAgreeLabel: document.getElementById('consent-agree-label').value,
+    consentDeclineLabel: document.getElementById('consent-decline-label').value,
+  };
+  try {
+    const result = await api('/api/admin/config', { method: 'POST', body: JSON.stringify(body) });
+    warnIfNotPersisted(result);
+    okEl.textContent = 'Saved.';
+    okEl.classList.remove('hidden');
+    setTimeout(() => okEl.classList.add('hidden'), 3500);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
 // ---- Kiosk chat provider ----
 function syncKioskChatUrlRow() {
   document.getElementById('kiosk-chat-url-row').style.display = document.getElementById('kiosk-chat-external').checked ? '' : 'none';
@@ -2296,6 +2352,20 @@ async function loadRecordingConfig() {
     document.getElementById('recording-quality-select').value = data.config.recordingQuality || 'standard';
     document.getElementById('recording-retention-input').value = data.config.recordingRetentionDays ?? 30;
     document.getElementById('agents-can-play-input').checked = data.config.agentsCanPlayRecordings === true;
+    const cc = data.config;
+    document.getElementById('footer-enabled').checked = cc.footerEnabled !== false;
+    document.getElementById('footer-tagline').value = cc.footerTagline || '';
+    document.getElementById('footer-privacy-label').value = cc.footerPrivacyLabel || '';
+    document.getElementById('footer-privacy-body').value = cc.footerPrivacyBody || '';
+    document.getElementById('footer-terms-label').value = cc.footerTermsLabel || '';
+    document.getElementById('footer-terms-body').value = cc.footerTermsBody || '';
+    document.getElementById('footer-copyright').value = cc.footerCopyright || '';
+    document.getElementById('consent-enabled').checked = cc.consentEnabled !== false;
+    document.getElementById('consent-title').value = cc.consentTitle || '';
+    document.getElementById('consent-intro').value = cc.consentIntro || '';
+    document.getElementById('consent-body').value = cc.consentBody || '';
+    document.getElementById('consent-agree-label').value = cc.consentAgreeLabel || '';
+    document.getElementById('consent-decline-label').value = cc.consentDeclineLabel || '';
     const ext = data.config.kioskChatProvider === 'external';
     document.getElementById('kiosk-chat-external').checked = ext;
     document.getElementById('kiosk-chat-builtin').checked = !ext;

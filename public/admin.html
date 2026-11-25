@@ -339,6 +339,59 @@
         </section>
 
         <section class="panel panel-full">
+          <h2>Kiosk footer</h2>
+          <form id="footer-form" class="hold-config-form">
+            <p class="sub-tight">Shown at the bottom of the kiosk's welcome and thank-you screens. Tapping Privacy Policy or Terms opens its text on the kiosk. A link only appears once you have entered its text.</p>
+            <label class="check-row" style="display: flex; align-items: center; gap: 10px; font-weight: 700; margin-top: 8px;">
+              <input id="footer-enabled" type="checkbox" style="width: 20px; height: 20px;" /> Show the footer
+            </label>
+            <label for="footer-tagline" style="margin-top: 14px; display: block;">Footer line</label>
+            <div class="hold-config-row"><input id="footer-tagline" type="text" maxlength="200" style="flex: 1; min-width: 280px;" /></div>
+            <label for="footer-privacy-label" style="margin-top: 14px; display: block;">First link name</label>
+            <div class="hold-config-row"><input id="footer-privacy-label" type="text" maxlength="60" /></div>
+            <label for="footer-privacy-body" style="margin-top: 10px; display: block;">First link text (Privacy Policy)</label>
+            <textarea id="footer-privacy-body" rows="8" maxlength="20000" style="width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit; line-height: 1.5;"></textarea>
+            <label for="footer-terms-label" style="margin-top: 14px; display: block;">Second link name</label>
+            <div class="hold-config-row"><input id="footer-terms-label" type="text" maxlength="60" /></div>
+            <label for="footer-terms-body" style="margin-top: 10px; display: block;">Second link text (Terms &amp; Conditions of Use)</label>
+            <p class="sub-tight">For both texts: leave a blank line between paragraphs, and put **double asterisks** around words to make them bold.</p>
+            <textarea id="footer-terms-body" rows="8" maxlength="20000" style="width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit; line-height: 1.5;"></textarea>
+            <label for="footer-copyright" style="margin-top: 14px; display: block;">Copyright line</label>
+            <p class="sub-tight">{year} becomes the current year automatically.</p>
+            <div class="hold-config-row"><input id="footer-copyright" type="text" maxlength="200" style="flex: 1; min-width: 280px;" /></div>
+            <div class="hold-config-row" style="margin-top: 14px;"><button type="submit" class="btn btn-primary">Save</button></div>
+            <p class="sub-tight">Kiosks pick up changes within a minute while on the welcome screen.</p>
+            <p id="footer-error" class="error hidden"></p>
+            <p id="footer-success" class="hint hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
+          <h2>Privacy notice &amp; consent</h2>
+          <form id="consent-form" class="hold-config-form">
+            <p class="sub-tight">Shown on the kiosk after the guest taps Start Video Call and before the language screen. "Agree" carries on as normal; "Decline" returns to the welcome screen.</p>
+            <label class="check-row" style="display: flex; align-items: center; gap: 10px; font-weight: 700; margin-top: 8px;">
+              <input id="consent-enabled" type="checkbox" style="width: 20px; height: 20px;" /> Show the notice before every call
+            </label>
+            <label for="consent-title" style="margin-top: 14px; display: block;">Title</label>
+            <div class="hold-config-row"><input id="consent-title" type="text" maxlength="120" style="flex: 1; min-width: 280px;" /></div>
+            <label for="consent-intro" style="margin-top: 14px; display: block;">Opening line (optional)</label>
+            <div class="hold-config-row"><input id="consent-intro" type="text" maxlength="200" style="flex: 1; min-width: 280px;" /></div>
+            <label for="consent-body" style="margin-top: 14px; display: block;">Notice text</label>
+            <p class="sub-tight">Leave a blank line between paragraphs. Put **double asterisks** around words to make them bold.</p>
+            <textarea id="consent-body" rows="14" maxlength="8000" style="width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit; line-height: 1.5;"></textarea>
+            <div class="hold-config-row" style="margin-top: 14px;">
+              <div><label for="consent-agree-label">Agree button</label><br /><input id="consent-agree-label" type="text" maxlength="40" /></div>
+              <div><label for="consent-decline-label">Decline button</label><br /><input id="consent-decline-label" type="text" maxlength="40" /></div>
+            </div>
+            <div class="hold-config-row" style="margin-top: 14px;"><button type="submit" class="btn btn-primary">Save</button></div>
+            <p class="sub-tight">Kiosks use the new text the next time a guest taps Start Video Call.</p>
+            <p id="consent-error" class="error hidden"></p>
+            <p id="consent-success" class="hint hidden"></p>
+          </form>
+        </section>
+
+        <section class="panel panel-full">
           <h2>Kiosk chat</h2>
           <form id="kiosk-chat-form" class="hold-config-form">
             <p class="sub-tight">Which chat the guest sees on the kiosk.</p>

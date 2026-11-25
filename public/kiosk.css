@@ -163,6 +163,32 @@ h2 { font-size: 30px; margin: 16px 0 4px; }
   margin: 0 0 16px;
 }
 
+.kiosk-footer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  padding: 14px 120px 14px; box-sizing: border-box; text-align: center;
+  border-top: 1px solid var(--border); background: var(--bg, #fff);
+  color: var(--sub); font-size: 14px; line-height: 1.4;
+}
+.kiosk-footer p { margin: 0; }
+.kf-tagline { margin-bottom: 4px !important; }
+.kf-links { margin: 2px 0 !important; }
+.kf-link { background: none; border: 0; padding: 6px 8px; font: inherit; font-size: 16px; color: var(--accent); text-decoration: underline; cursor: pointer; }
+.kf-sep { color: var(--sub); }
+.kf-copy { font-size: 13px; opacity: .85; }
+.kf-modal-card { max-width: 720px; width: calc(100% - 32px); }
+.kf-modal-card .consent-text { max-height: 52vh; margin-bottom: 8px; }
+.consent-card { max-width: 720px; width: 100%; }
+.consent-text {
+  width: 100%; max-height: 58vh; overflow-y: auto; text-align: left;
+  margin: 12px 0 20px; padding: 18px 22px; box-sizing: border-box;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  font-size: 17px; line-height: 1.55; color: var(--text);
+}
+.consent-text p { margin: 0 0 12px; }
+.consent-text p:last-child { margin-bottom: 0; }
+.consent-actions { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
+.consent-actions .btn { min-height: 56px; padding: 0 32px; font-size: 18px; }
+
 .language-list {
   display: flex; flex-wrap: wrap; justify-content: center; gap: 12px;
   max-width: 560px; margin: 8px 0 20px;
