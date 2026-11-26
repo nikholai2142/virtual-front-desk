@@ -5,13 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Front Desk — Agent Dashboard</title>
 <link rel="stylesheet" href="agent.css" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/branding/app-icon-180.png" />
+<meta name="theme-color" content="#1d3566" />
 </head>
 <body>
 
   <!-- LOGIN -->
   <section id="screen-login" class="screen active">
     <form id="login-form" class="login-card">
-      <h1>Agent Sign-in</h1>
+      <img class="login-icon" src="branding/login-icon.jpg" alt="Virtual Front Desk" width="240" height="160" />
+            <h1>Agent Sign-in</h1>
       <p class="sub">Enter your password to go online.</p>
       <input id="login-password" type="password" autocomplete="current-password" placeholder="Password" maxlength="60" />
       <button id="login-submit" type="submit" class="btn btn-primary">Sign In</button>
@@ -67,6 +71,20 @@
 
     <main id="view-calls" class="layout view active">
       <aside class="queue-panel">
+        <div id="push-card" class="push-card hidden">
+          <div class="push-card-head">
+            <span id="push-card-icon" class="push-card-icon" aria-hidden="true">🔔</span>
+            <div>
+              <div id="push-card-title" class="push-card-title"></div>
+              <div id="push-card-body" class="push-card-body"></div>
+            </div>
+          </div>
+          <div id="push-card-actions" class="push-card-actions">
+            <button type="button" id="btn-push-on" class="btn-small push-primary hidden">Turn on call notifications</button>
+            <button type="button" id="btn-push-test" class="btn-small hidden">Send a test</button>
+            <button type="button" id="btn-push-off" class="btn-small hidden">Turn off on this device</button>
+          </div>
+        </div>
         <h2>Waiting <span id="queue-count" class="count-badge">0</span>
           <button id="btn-toggle-ring" class="ring-toggle-btn" type="button" title="Mute ring tone">🔔</button>
         </h2>

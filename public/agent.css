@@ -23,10 +23,22 @@ html, body {
 
 /* Login */
 #screen-login.active { display: flex; align-items: center; justify-content: center; }
+/* Sign-in screen only: same background as the kiosk (branding/background.jpg
+   if present, else the soft gradient). The signed-in dashboard is unchanged. */
+#screen-login.active {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.96)),
+    url('branding/background.jpg'),
+    linear-gradient(160deg, #ffffff 0%, #eef4f9 100%);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
 .login-card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 18px; padding: 40px; width: 320px; text-align: center;
 }
+.login-icon { display: block; width: 100%; max-width: 240px; height: auto; margin: -8px auto 14px; border-radius: 14px; }
 .login-card h1 { margin: 0 0 4px; font-size: 24px; }
 .sub { color: var(--sub); font-size: 14px; margin: 0 0 20px; }
 #login-password, #forgot-password-name {
@@ -564,3 +576,15 @@ html, body {
 .kchat-notice { margin: 10px 0; padding: 12px 14px; border-radius: 12px; background: #121b2e; font-size: 13px; color: #9fb0cc; }
 .msg-bubble.dim, .msg-system.dim { opacity: .72; }
 .msg-image-gone { display: block; margin: 4px 0; padding: 8px 10px; border: 1px dashed #52617a; border-radius: 8px; font-size: 12px; opacity: .9; }
+
+/* ---- Call notifications card ---- */
+.push-card { margin-bottom: 14px; padding: 12px 14px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border); }
+.push-card.on { border-color: var(--good); }
+.push-card.blocked { border-color: #b65a1c; }
+.push-card-head { display: flex; gap: 10px; align-items: flex-start; }
+.push-card-icon { flex: 0 0 auto; }
+.push-card-title { font-size: 13px; font-weight: 800; }
+.push-card-body { margin-top: 2px; font-size: 12px; line-height: 1.45; color: var(--sub); }
+.push-card-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.push-card-actions .btn-small { min-height: 40px; }
+.push-card-actions .push-primary { background: var(--accent); border-color: var(--accent); color: #fff; }

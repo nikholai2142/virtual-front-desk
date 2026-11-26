@@ -1528,3 +1528,23 @@ The kiosk's welcome and thank-you screens show a footer: a short line, two links
 ## Chat preset messages
 
 Admin → Configuration → Kiosk chat → "Preset messages" sets the buttons guests can tap at the start of a built-in chat (up to 6, 80 characters each). Add, rename, reorder or remove them and press Save; kiosks pick the change up within a minute. With no presets the buttons are hidden.
+
+## Call notifications (web push)
+
+Agents can get a notification on Windows, Android or iPhone when a kiosk starts a call, even with the dashboard in the background. In the agent dashboard, click **Turn on call notifications** (once per device) and allow the browser prompt.
+
+- Who is notified: every agent with notifications on who speaks the call's language, is not set to Busy and is not already on a call. A transferred call notifies the other agents.
+- When someone answers (or the guest gives up) the notification is replaced by a short silent "no longer waiting" note and removed.
+- Tapping a notification opens or focuses `/agent`. If the page was closed, the agent signs in again (the password is only kept per browser tab).
+- Signing out stops notifications for that device; signing in again re-enables them if the browser permission is still allowed.
+- The sound is the device's normal notification sound, not the dashboard ring tone. Silent mode and Do Not Disturb still apply.
+- iPhone/iPad (iOS 16.4+): open the dashboard, Share, **Add to Home Screen**, open it from that icon, then turn notifications on.
+- Needs HTTPS (Render provides it). Push messages are tiny (a few hundred bytes each), so bandwidth use is negligible.
+- Keys: VAPID keys are generated on first start and kept in Redis (or `vapid.json` without Redis). To pin your own, set `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`. Optionally set `VAPID_SUBJECT` (for example `mailto:you@yourhotel.com`).
+- Subscriptions are stored in Redis (`vfd:pushsubs`), or `pushsubs.json` without Redis.
+- Files: `push.js` (sending), `public/sw.js` (service worker), `public/manifest.webmanifest` and the icons in `public/branding/app-icon-*.png`.
+
+### Sign-in page background
+
+The agent, admin and combined sign-in pages use the same background as the kiosk (`public/branding/background.jpg` with the same light wash, or the soft gradient when there is no image). Only the sign-in screen has it; the dashboards are unchanged.
+The sign-in pages also show `public/branding/login-icon.jpg` above the form; replace that file to change the picture.

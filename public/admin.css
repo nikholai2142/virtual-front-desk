@@ -21,10 +21,22 @@ html, body {
 
 /* Login */
 #screen-login.active { display: flex; align-items: center; justify-content: center; }
+/* Sign-in screen only: same background as the kiosk (branding/background.jpg
+   if present, else the soft gradient). The signed-in dashboard is unchanged. */
+#screen-login.active {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.96)),
+    url('branding/background.jpg'),
+    linear-gradient(160deg, #ffffff 0%, #eef4f9 100%);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
 .login-card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 18px; padding: 40px; width: 320px; text-align: center;
 }
+.login-icon { display: block; width: 100%; max-width: 240px; height: auto; margin: -8px auto 14px; border-radius: 14px; }
 .login-card h1 { margin: 0 0 4px; font-size: 24px; }
 .sub { color: var(--sub); font-size: 14px; margin: 0 0 20px; }
 #login-password {
