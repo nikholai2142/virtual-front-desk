@@ -671,6 +671,31 @@ async function clearTestData() {
   }
 }
 
+// ---- Web push (VAPID keys + agents' device subscriptions) ------------------
+const VAPID_KEY = 'vfd:vapid';
+const PUSH_SUBS_KEY = 'vfd:pushsubs';
+
+async function loadVapid() {
+  if (!configured) return null;
+  try { const raw = await redisCommand(['GET', VAPID_KEY]); connected = true; return raw ? JSON.parse(raw) : null; }
+  catch (err) { connected = false; console.error('[store] could not load VAPID keys:', err.message); return null; }
+}
+async function persistVapid(v) {
+  if (!configured) return false;
+  try { await redisCommand(['SET', VAPID_KEY, JSON.stringify(v)]); connected = true; return true; }
+  catch (err) { connected = false; console.error('[store] could not save VAPID keys:', err.message); return false; }
+}
+async function loadPushSubs() {
+  if (!configured) return null;
+  try { const raw = await redisCommand(['GET', PUSH_SUBS_KEY]); connected = true; return raw ? JSON.parse(raw) : null; }
+  catch (err) { connected = false; console.error('[store] could not load push subscriptions:', err.message); return null; }
+}
+async function persistPushSubs(subs) {
+  if (!configured) return false;
+  try { await redisCommand(['SET', PUSH_SUBS_KEY, JSON.stringify(subs)]); connected = true; return true; }
+  catch (err) { connected = false; console.error('[store] could not save push subscriptions:', err.message); return false; }
+}
+
 module.exports = {
   configured,
   checkConnection,
@@ -704,4 +729,8 @@ module.exports = {
   persistConfig,
   loadRatings,
   persistRating,
+  loadVapid,
+  persistVapid,
+  loadPushSubs,
+  persistPushSubs,
 };

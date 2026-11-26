@@ -519,6 +519,124 @@ function connectWS(password, { isReconnect = false } = {}) {
   });
 }
 
+
+// ---- Call notifications (Web Push) -------------------------------------------
+// Lets an agent get a notification on THIS device when a kiosk calls, even with
+// the dashboard in the background. The browser subscription is made here; the
+// server stores it for the signed-in agent (see push.js / sw.js).
+const pushCard = document.getElementById('push-card');
+let pushBusy = false;
+const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+function urlB64ToBytes(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function pushRegistration() {
+  return navigator.serviceWorker.register('/sw.js');
+}
+
+function setPushCard(state, title, body, { on = false, test = false, off = false } = {}) {
+  pushCard.classList.remove('hidden');
+  pushCard.classList.toggle('on', state === 'on');
+  pushCard.classList.toggle('blocked', state === 'blocked');
+  document.getElementById('push-card-title').textContent = title;
+  document.getElementById('push-card-body').textContent = body;
+  document.getElementById('btn-push-on').classList.toggle('hidden', !on);
+  document.getElementById('btn-push-test').classList.toggle('hidden', !test);
+  document.getElementById('btn-push-off').classList.toggle('hidden', !off);
+  document.getElementById('push-card-actions').classList.toggle('hidden', !(on || test || off));
+}
+
+async function refreshPushCard() {
+  if (!pushSupported) {
+    if (isIOS && !isStandalone) {
+      setPushCard('ios', 'Call notifications on iPhone / iPad', 'Add this page to the Home Screen first (Share, then Add to Home Screen), open it from that icon, then turn notifications on.');
+    } else {
+      pushCard.classList.add('hidden');
+    }
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    setPushCard('blocked', 'Notifications are blocked in this browser', 'Click the padlock next to the address, set Notifications to Allow, then reload this page.');
+    return;
+  }
+  let sub = null;
+  try { const reg = await pushRegistration(); sub = await reg.pushManager.getSubscription(); } catch { /* ignore */ }
+  if (sub && Notification.permission === 'granted') {
+    setPushCard('on', 'Call notifications are on for this device', 'You will be notified when a kiosk calls and you are not already on a call.', { test: true, off: true });
+  } else {
+    setPushCard('off', 'Call notifications are off', 'Get a notification on this device when a kiosk starts a call, even if this page is in the background.', { on: true });
+  }
+}
+
+/** After sign-in: if this device already has a subscription, attach it to this agent. */
+async function pushSyncOnLogin() {
+  if (!pushSupported) { refreshPushCard(); return; }
+  try {
+    if (Notification.permission === 'granted') {
+      const reg = await pushRegistration();
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) wsSend({ type: 'push-subscribe', subscription: sub.toJSON() });
+    }
+  } catch { /* ignore */ }
+  refreshPushCard();
+}
+
+async function enablePush() {
+  if (pushBusy) return;
+  pushBusy = true;
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { await refreshPushCard(); return; }
+    const reg = await pushRegistration();
+    await navigator.serviceWorker.ready;
+    const keyRes = await fetch('/api/push-key', { cache: 'no-store' });
+    const { publicKey } = await keyRes.json();
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToBytes(publicKey) });
+    wsSend({ type: 'push-subscribe', subscription: sub.toJSON() });
+  } catch (err) {
+    console.error('[push] could not turn on:', err);
+    setPushCard('off', 'Could not turn on notifications', 'This browser would not set them up (' + (err && err.message ? err.message : 'unknown error') + '). Try again, or use a different browser.', { on: true });
+    pushBusy = false;
+    return;
+  }
+  pushBusy = false;
+  refreshPushCard();
+}
+
+async function disablePush() {
+  try {
+    const reg = await pushRegistration();
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      wsSend({ type: 'push-unsubscribe', endpoint: sub.endpoint });
+      await sub.unsubscribe();
+    }
+  } catch { /* ignore */ }
+  refreshPushCard();
+}
+
+/** Called on sign-out: stop this device notifying until the next sign-in. */
+async function pushDetachOnSignOut() {
+  try {
+    if (!pushSupported) return;
+    const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (sub) wsSend({ type: 'push-unsubscribe', endpoint: sub.endpoint });
+  } catch { /* ignore */ }
+}
+
+document.getElementById('btn-push-on').addEventListener('click', enablePush);
+document.getElementById('btn-push-off').addEventListener('click', disablePush);
+document.getElementById('btn-push-test').addEventListener('click', () => wsSend({ type: 'push-test' }));
+if (pushSupported) { try { pushRegistration().catch(() => {}); } catch { /* ignore */ } }
+
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
@@ -546,6 +664,7 @@ function handleServerMessage(msg) {
       wsSend({ type: 'get-chats' });
       refreshCallConfig(); // so the language list is ready before the first call, not just after answering one
       acquireWakeLock();
+      pushSyncOnLogin();
       break;
 
     case 'agent-login-fail':
@@ -564,6 +683,19 @@ function handleServerMessage(msg) {
 
     case 'queue-update':
       renderQueue(msg.queue);
+      break;
+
+    case 'push-subscribed':
+    case 'push-unsubscribed':
+      refreshPushCard();
+      break;
+
+    case 'push-subscribe-failed':
+      setPushCard('off', 'Could not turn on notifications', 'The server did not accept this device. Try again, or use a different browser.', { on: true });
+      break;
+
+    case 'push-test-sent':
+      if (!msg.devices) setPushCard('off', 'No device is set up', 'Turn on call notifications first.', { on: true });
       break;
 
     case 'answer-failed':
@@ -1626,12 +1758,14 @@ document.getElementById('change-password-form').addEventListener('submit', (e) =
   wsSend({ type: 'change-password', currentPassword, newPassword });
 });
 
-document.getElementById('btn-sign-out').addEventListener('click', () => {
+document.getElementById('btn-sign-out').addEventListener('click', async () => {
   if (currentCallId) wsSend({ type: 'end-call', callId: currentCallId });
   signedOutIntentionally = true;
   clearTimeout(reconnectTimer);
   sessionStorage.removeItem(STORAGE_KEY);
   releaseWakeLock();
+  // Tell the server to stop notifying this device (wait briefly so it is sent before the socket closes).
+  await Promise.race([pushDetachOnSignOut(), new Promise((r) => setTimeout(r, 800))]);
   try { if (ws) ws.close(); } catch { /* ignore */ }
   location.reload();
 });

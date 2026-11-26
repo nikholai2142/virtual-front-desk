@@ -19,6 +19,7 @@ const store = require('./store');
 const chat = require('./chat');
 const turn = require('./turn');
 const r2 = require('./r2');
+const push = require('./push');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -810,6 +811,7 @@ const MIME = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
@@ -828,6 +830,7 @@ function serveStatic(req, res) {
   if (reqPath === '/agent') reqPath = '/agent.html';
   if (reqPath === '/admin') reqPath = '/admin.html';
   if (reqPath === '/login') reqPath = '/login.html';
+  if (reqPath === '/sw.js') { /* service worker: served from the root so it can control /agent */ }
   const filePath = path.normalize(path.join(PUBLIC_DIR, reqPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403).end('Forbidden');
@@ -1159,6 +1162,50 @@ function syncBusyNotices() {
   }
 }
 
+// ---- Web push for waiting calls ----------------------------------------
+// Agents who turned on notifications on a device get a push when a call
+// starts waiting (or is transferred), and a "taken" push that replaces it
+// when someone answers or the guest gives up. See push.js / public/sw.js.
+function agentIsOnACall(agentId) {
+  return [...calls.values()].some((c) => c.agentId === agentId && c.answeredAt);
+}
+
+function pushRecipients(call, excludeAgentId) {
+  const ids = push.agentIdsWithSubscriptions().filter((id) => id !== excludeAgentId);
+  const rec = (id) => AGENTS.find((a) => a.id === id);
+  const speaks = (id) => {
+    const a = rec(id);
+    const langs = a && Array.isArray(a.languages) && a.languages.length ? a.languages : [DEFAULT_LANGUAGE];
+    return langs.includes(call.language);
+  };
+  let list = ids.filter((id) => rec(id) && speaks(id));
+  if (!list.length) list = ids.filter((id) => rec(id)); // nobody speaks it: same fallback as the queue
+  return list.filter((id) => {
+    if (agentIsOnACall(id)) return false;
+    const conns = [...agentConns].filter((c) => c.agentId === id);
+    if (conns.length && conns.every((c) => c.status === 'busy')) return false; // chose Busy
+    return true;
+  });
+}
+
+function notifyIncomingCall(callId, excludeAgentId) {
+  const call = calls.get(callId);
+  if (!call) return;
+  const ids = pushRecipients(call, excludeAgentId);
+  call.pushedTo = ids;
+  if (!ids.length) return;
+  push.sendToAgents(ids, {
+    type: 'call', callId, kiosk: call.kioskId, topic: call.topic, transferred: !!call.transferredFrom,
+  }, { ttl: 90, urgency: 'high', topic: `c${callId}` }).catch(() => {});
+}
+
+function cancelCallPush(callId, call, text) {
+  const ids = call && call.pushedTo;
+  if (!ids || !ids.length) return;
+  call.pushedTo = null;
+  push.sendToAgents(ids, { type: 'cancel', callId, text }, { ttl: 30, urgency: 'high', topic: `c${callId}` }).catch(() => {});
+}
+
 function removeFromQueue(callId) {
   const idx = queue.indexOf(callId);
   if (idx !== -1) queue.splice(idx, 1);
@@ -1236,6 +1283,7 @@ function endCall(callId, reason) {
   if (!call) return;
   clearHoldTimers(call);
   accumulateHoldTime(call); // in case the call ends while still on hold
+  if (!call.answeredAt) cancelCallPush(callId, call, 'The guest is no longer waiting.');
   removeFromQueue(callId);
   calls.delete(callId);
 
@@ -1350,6 +1398,7 @@ function transferCall(callId, { note, language, fromAgentName }) {
   }
 
   const outgoingAgentConn = call.agentConn;
+  const outgoingAgentId = call.agentId || null;
 
   // Reset the call back to "waiting for an agent" — notes, hold stats, and
   // the wait clock all start fresh for this next leg (the segment that just
@@ -1385,6 +1434,7 @@ function transferCall(callId, { note, language, fromAgentName }) {
     a.send({ type: 'call-log-changed' });
   }
   broadcastQueue();
+  notifyIncomingCall(callId, outgoingAgentId);
 }
 
 // ======================================================================
@@ -3270,6 +3320,7 @@ function handleGuestConnection(conn) {
       queue.push(callId);
       conn.send({ type: 'queued', callId, position: queue.indexOf(callId) + 1 });
       broadcastQueue();
+      notifyIncomingCall(callId);
       return;
     }
 
@@ -3456,6 +3507,23 @@ function handleAgentConnection(conn) {
       return;
     }
 
+    if (msg.type === 'push-subscribe') {
+      const ok = push.addSubscription(agentId, msg.subscription);
+      conn.send({ type: ok ? 'push-subscribed' : 'push-subscribe-failed' });
+      return;
+    }
+    if (msg.type === 'push-unsubscribe') {
+      const ep = String((msg.endpoint) || '');
+      if (push.hasSubscription(agentId, ep)) push.removeEndpoint(ep);
+      conn.send({ type: 'push-unsubscribed' });
+      return;
+    }
+    if (msg.type === 'push-test') {
+      const n = await push.sendToAgents([agentId], { type: 'test' }, { ttl: 60, urgency: 'high' });
+      conn.send({ type: 'push-test-sent', devices: n });
+      return;
+    }
+
     if (msg.type === 'set-avatar') {
       const agent = AGENTS.find((a) => a.id === agentId);
       const avatar = sanitizeAvatar(msg.avatar);
@@ -3536,6 +3604,7 @@ function handleAgentConnection(conn) {
         conn.send({ type: 'answer-failed', callId, reason: 'already-on-a-call' });
         return;
       }
+      cancelCallPush(callId, call, `Answered by ${agentName}.`);
       removeFromQueue(callId);
       call.agentConn = conn;
       call.agentId = agentId;
@@ -3733,6 +3802,11 @@ const server = http.createServer((req, res) => {
       console.error('[turn] unhandled error:', err);
       sendJson(res, 500, { error: 'internal error' });
     });
+    return;
+  }
+  if (urlObj.pathname === '/api/push-key' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ publicKey: push.publicKey() }));
     return;
   }
   if (urlObj.pathname === '/api/call-config' && req.method === 'GET') {
@@ -3944,6 +4018,7 @@ async function main() {
     await saveAdmins();
   }
   CONFIG = await store.loadConfig(CONFIG);
+  await push.init();
   callLog.push(...await store.loadCallLog());
   missedCallLog.push(...await store.loadMissedCallLog());
   busyLog.push(...await store.loadBusyLog());
